@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +10,10 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -18,7 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config structures
+// Config structures - определяют структуру конфигурационного файла
 type Config struct {
 	UpdateInterval string           `yaml:"update_interval"`
 	Metrics        []Metric         `yaml:"metrics"`
@@ -50,7 +53,7 @@ type PrometheusConfig struct {
 	Timeout string `yaml:"timeout"`
 }
 
-// Prometheus response structures
+// Prometheus response structures - для парсинга JSON ответов от Prometheus API
 type PrometheusResponse struct {
 	Status string `json:"status"`
 	Data   struct {
@@ -62,38 +65,67 @@ type PrometheusResponse struct {
 	} `json:"data"`
 }
 
+// HealthCalculator - основной сервисный объект
 type HealthCalculator struct {
-	config              *Config
-	healthScore         prometheus.Gauge
-	metricValues        map[string]float64
-	mutex               sync.RWMutex
-	prometheusDownCount int
-	httpClient          *http.Client
+	config                    *Config
+	healthScore               prometheus.Gauge
+	metricValues              map[string]float64
+	metricsFetched            prometheus.Counter
+	metricsFailed             prometheus.Counter
+	calculationTime           prometheus.Histogram
+	lastSuccessfulCalculation time.Time
+	prometheusDownCount       int
+	httpClient                *http.Client
+	mutex                     sync.RWMutex
 }
 
+// NewHealthCalculator создает и инициализирует новый экземпляр калькулятора
 func NewHealthCalculator() *HealthCalculator {
+	// Регистрируем Prometheus метрики
 	healthScore := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "platform_health_score",
 		Help: "Overall platform health score (0.0 - 1.0)",
 	})
-	prometheus.MustRegister(healthScore)
+
+	metricsFetched := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "health_calculator_metrics_fetched_total",
+		Help: "Total number of metrics successfully fetched from Prometheus",
+	})
+
+	metricsFailed := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "health_calculator_metrics_failed_total",
+		Help: "Total number of failed metric fetches from Prometheus",
+	})
+
+	calculationTime := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "health_calculator_calculation_duration_seconds",
+		Help:    "Time taken to calculate health score",
+		Buckets: []float64{0.1, 0.5, 1.0, 2.0, 5.0},
+	})
+
+	// Регистрируем все метрики в Prometheus registry
+	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime)
 
 	return &HealthCalculator{
-		healthScore:  healthScore,
-		metricValues: make(map[string]float64),
+		healthScore:     healthScore,
+		metricValues:    make(map[string]float64),
+		metricsFetched:  metricsFetched,
+		metricsFailed:   metricsFailed,
+		calculationTime: calculationTime,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
+// loadConfig загружает и парсит конфигурационный файл
 func (hc *HealthCalculator) loadConfig(configPath string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config: %v", err)
 	}
 
-	// Replace environment variables
+	// Заменяем переменные окружения в конфиге (например ${TELEGRAM_BOT_TOKEN})
 	expanded := os.ExpandEnv(string(data))
 
 	var config Config
@@ -102,10 +134,16 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 	}
 
 	hc.config = &config
-	timeout, _ := time.ParseDuration(config.Prometheus.Timeout)
+
+	// Парсим timeout из конфига
+	timeout, err := time.ParseDuration(config.Prometheus.Timeout)
+	if err != nil {
+		log.Printf("Invalid timeout format, using default 30s: %v", err)
+		timeout = 30 * time.Second
+	}
 	hc.httpClient.Timeout = timeout
 
-	// Validate weights sum to 1.0
+	// Валидируем что сумма весов метрик = 1.0
 	totalWeight := 0.0
 	for _, metric := range config.Metrics {
 		totalWeight += metric.Weight
@@ -115,9 +153,12 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 		return fmt.Errorf("metric weights must sum to 1.0, got: %f", totalWeight)
 	}
 
+	log.Printf("Config loaded successfully: %d metrics, update interval: %s",
+		len(config.Metrics), config.UpdateInterval)
 	return nil
 }
 
+// queryPrometheus выполняет запрос к Prometheus API
 func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 	url := fmt.Sprintf("%s/api/v1/query", hc.config.Prometheus.URL)
 	req, err := http.NewRequest("GET", url, nil)
@@ -134,6 +175,10 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 		return 0, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("prometheus returned status: %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -153,16 +198,21 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 		return 0, fmt.Errorf("no data returned from query")
 	}
 
-	// Extract the value (timestamp, value)
+	// Prometheus возвращает значения в формате [timestamp, value]
 	value := result.Data.Result[0].Value[1]
 	switch v := value.(type) {
 	case string:
-		return strconv.ParseFloat(v, 64)
+		floatValue, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, fmt.Errorf("failed to parse value: %v", err)
+		}
+		return floatValue, nil
 	default:
 		return 0, fmt.Errorf("unexpected value type: %T", value)
 	}
 }
 
+// queryPrometheusWithRetry выполняет запрос с ретраями
 func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName string) (float64, error) {
 	var lastErr error
 	maxRetries := 3
@@ -170,27 +220,32 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 	for i := 0; i < maxRetries; i++ {
 		value, err := hc.queryPrometheus(query)
 		if err == nil {
-			hc.prometheusDownCount = 0 // Reset counter on success
+			hc.prometheusDownCount = 0 // Сбрасываем счетчик при успехе
+			hc.metricsFetched.Inc()
 			return value, nil
 		}
 
 		lastErr = err
+		hc.metricsFailed.Inc()
 		log.Printf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, err)
-		time.Sleep(time.Duration(i+1) * time.Second) // Exponential backoff
+
+		// Exponential backoff: 1s, 2s, 3s
+		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
-	// All retries failed
+	// Все ретраи провалились
 	hc.prometheusDownCount++
-	if hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
+	if hc.config != nil && hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
 		hc.sendAlert(fmt.Sprintf("🚨 Prometheus unavailable after %d attempts. Last error: %v",
 			hc.prometheusDownCount, lastErr))
 	}
 
-	return 0, lastErr
+	return 0, fmt.Errorf("all retries failed: %v", lastErr)
 }
 
+// sendAlert отправляет уведомление в Telegram
 func (hc *HealthCalculator) sendAlert(message string) {
-	if hc.config.Alerting.Telegram.BotToken == "" || hc.config.Alerting.Telegram.ChatID == "" {
+	if hc.config == nil || hc.config.Alerting.Telegram.BotToken == "" || hc.config.Alerting.Telegram.ChatID == "" {
 		log.Printf("ALERT would be sent: %s", message)
 		return
 	}
@@ -205,8 +260,7 @@ func (hc *HealthCalculator) sendAlert(message string) {
 
 	jsonData, _ := json.Marshal(payload)
 
-	resp, err := hc.httpClient.Post(url, "application/json",
-		bytes.NewReader(jsonData))
+	resp, err := hc.httpClient.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
 		log.Printf("Failed to send Telegram alert: %v", err)
 		return
@@ -215,11 +269,14 @@ func (hc *HealthCalculator) sendAlert(message string) {
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Telegram API returned non-200 status: %d", resp.StatusCode)
+	} else {
+		log.Printf("Telegram alert sent successfully")
 	}
 }
 
+// normalizeValue нормализует значение метрики в диапазон 0-1
 func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64 {
-	// Clamp value to valid range
+	// Ограничиваем значение минимальным и максимальным диапазоном
 	if value < metric.MinValue {
 		return metric.MinValue
 	}
@@ -227,7 +284,7 @@ func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64
 		return metric.MaxValue
 	}
 
-	// Normalize to 0-1 range based on min/max
+	// Нормализуем к диапазону 0-1
 	rangeSize := metric.MaxValue - metric.MinValue
 	if rangeSize == 0 {
 		return 1.0
@@ -236,7 +293,10 @@ func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64
 	return (value - metric.MinValue) / rangeSize
 }
 
+// calculateHealthScore - основная функция расчета health score
 func (hc *HealthCalculator) calculateHealthScore() {
+	startTime := time.Now()
+
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
 
@@ -263,7 +323,7 @@ func (hc *HealthCalculator) calculateHealthScore() {
 		return
 	}
 
-	// If some metrics are missing, adjust score proportionally
+	// Если некоторые метрики недоступны, корректируем score пропорционально
 	if validMetrics < len(hc.config.Metrics) {
 		adjustment := float64(validMetrics) / float64(len(hc.config.Metrics))
 		totalScore *= adjustment
@@ -272,64 +332,154 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	}
 
 	hc.healthScore.Set(totalScore)
-	log.Printf("Health score updated: %.4f (from %d metrics)", totalScore, validMetrics)
+	hc.lastSuccessfulCalculation = time.Now()
+	hc.calculationTime.Observe(time.Since(startTime).Seconds())
+
+	log.Printf("Health score updated: %.4f (from %d/%d metrics, calculation took %v)",
+		totalScore, validMetrics, len(hc.config.Metrics), time.Since(startTime))
 }
 
-func (hc *HealthCalculator) Start() error {
-	// Initial config load
-	if err := hc.loadConfig("health-config.yaml"); err != nil {
-		return fmt.Errorf("failed to load config: %v", err)
+// healthHandler - HTTP handler для health checks
+func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
+	hc.mutex.RLock()
+	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
+	hc.mutex.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Если последний расчет был более 10 минут назад - считаем сервис unhealthy
+	if lastUpdate > 10*time.Minute {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":    "unhealthy",
+			"reason":    fmt.Sprintf("last calculation too old: %v", lastUpdate),
+			"timestamp": hc.lastSuccessfulCalculation.Format(time.RFC3339),
+		})
+		return
 	}
 
-	// Start background config reloader
-	go hc.watchConfig()
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":                      "healthy",
+		"last_successful_calculation": hc.lastSuccessfulCalculation.Format(time.RFC3339),
+		"age":                         lastUpdate.String(),
+	})
+}
 
-	// Start metric calculator
+// Start запускает основной цикл работы сервиса
+func (hc *HealthCalculator) Start(ctx context.Context) error {
+	// Загружаем конфиг при старте
+	if err := hc.loadConfig("health-config.yaml"); err != nil {
+		return fmt.Errorf("failed to load initial config: %v", err)
+	}
+
+	// Запускаем фоновое обновление конфига
+	go hc.watchConfig(ctx)
+
+	// Парсим интервал обновления из конфига
 	interval, err := time.ParseDuration(hc.config.UpdateInterval)
 	if err != nil {
-		interval = 5 * time.Minutes // Default fallback
+		log.Printf("Invalid update interval, using default 5m: %v", err)
+		interval = 5 * time.Minute
 	}
 
+	log.Printf("Starting health calculation loop with interval: %v", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// Выполняем первый расчет сразу при старте
+	hc.calculateHealthScore()
+
+	// Основной цикл
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Shutting down health calculator gracefully")
+			return nil
 		case <-ticker.C:
 			hc.calculateHealthScore()
 		}
 	}
 }
 
-func (hc *HealthCalculator) watchConfig() {
+// watchConfig периодически перезагружает конфиг
+func (hc *HealthCalculator) watchConfig(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if err := hc.loadConfig("health-config.yaml"); err != nil {
-			log.Printf("Failed to reload config: %v", err)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := hc.loadConfig("health-config.yaml"); err != nil {
+				log.Printf("Failed to reload config: %v", err)
+			}
 		}
 	}
 }
 
 func main() {
+	log.Println("Starting Health Calculator Service...")
+
 	calculator := NewHealthCalculator()
 
-	// Start metrics HTTP server
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	// Настраиваем HTTP сервер
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())          // Prometheus metrics endpoint
+	mux.HandleFunc("/health", calculator.healthHandler) // Health check endpoint
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		w.Write([]byte("Health Calculator Service"))
 	})
 
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Запускаем HTTP сервер в горутине
 	go func() {
-		log.Printf("Starting metrics server on :8080")
-		if err := http.ListenAndServe(":8080", nil); err != nil {
-			log.Fatal(err)
+		log.Printf("Starting HTTP server on %s", server.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
 
-	if err := calculator.Start(); err != nil {
-		log.Fatal(err)
+	// Настраиваем graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Обработка сигналов OS для graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Запускаем основной сервис в горутине
+	serviceErr := make(chan error, 1)
+	go func() {
+		serviceErr <- calculator.Start(ctx)
+	}()
+
+	// Ожидаем сигнал завершения или ошибку сервиса
+	select {
+	case sig := <-sigChan:
+		log.Printf("Received signal: %v, shutting down...", sig)
+		cancel()
+	case err := <-serviceErr:
+		log.Printf("Service error: %v, shutting down...", err)
+		cancel()
 	}
+
+	// Graceful shutdown HTTP сервера
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+
+	log.Println("Health Calculator Service stopped gracefully")
 }
