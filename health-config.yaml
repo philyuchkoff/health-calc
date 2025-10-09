@@ -1,0 +1,42 @@
+# Health Model Configuration
+# Version: 1.0
+update_interval: "5m"
+
+metrics:
+  - name: "synthetic_uptime"
+    prometheus_query: 'avg(synthetic_check_success{environment="production"})'
+    weight: 0.4
+    description: "Uptime from external synthetic monitoring"
+    min_valid_value: 0.0
+    max_valid_value: 1.0
+
+  - name: "allure_test_pass_rate" 
+    prometheus_query: 'sum(allure_test_passed) / sum(allure_test_total)'
+    weight: 0.3
+    description: "Test pass rate from Allure TestOps"
+    min_valid_value: 0.0
+    max_valid_value: 1.0
+
+  - name: "api_success_rate"
+    prometheus_query: 'rate(http_requests_total{status=~"2..",job="api"}[5m]) / rate(http_requests_total{job="api"}[5m])'
+    weight: 0.2
+    description: "API success rate from application metrics"
+    min_valid_value: 0.0
+    max_valid_value: 1.0
+
+  - name: "infrastructure_health"
+    prometheus_query: 'avg(node_up{job="node-exporter"})'
+    weight: 0.1
+    description: "Infrastructure node health"
+    min_valid_value: 0.0
+    max_valid_value: 1.0
+
+alerting:
+  telegram:
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    chat_id: "${TELEGRAM_CHAT_ID}"
+  prometheus_unavailable_alert_threshold: 3
+
+prometheus:
+  url: "http://prometheus:9090"
+  timeout: "30s"
