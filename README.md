@@ -80,15 +80,23 @@
 - **Мониторинг:** метрика `health_calculator_circuit_breaker_tripped_total`
 - **Endpoint для мониторинга:** `/circuit-breaker` - показывает текущее состояние
 
-### 6. Health checks:
+### 6. Graceful Degradation:
+
+Обеспечивает непрерывную работу при частичной недоступности метрик:
+
+- **Кэширование:** TTL-based кэш успешных значений (по умолчанию 5 минут)
+- **Fallback стратегии:** zero, neutral, average, last_known (настраивается)
+- **Фактор деградации:** плавное снижение health score до 30% при проблемах
+- **Мониторинг:** метрики `health_calculator_degraded_mode` и `health_calculator_fallback_used_total`
+- **Интеграция:** работает совместно с circuit breaker
+
+### 7. Health checks:
 
 - проверяет что расчеты выполняются регулярно (<10 минут)
-
 - возвращает JSON с деталями статуса
+- показывает degraded статус при использовании fallback
 
-  
-
-### 7. Безопасность:
+### 8. Безопасность:
 
 - таймауты на HTTP запросы
 
@@ -113,7 +121,7 @@
 - [x] хелсчек с бизнес-логикой
 - [x] circuit breaker
 - [ ] structured logging
-- [ ] graceful degradation
+- [x] graceful degradation
 - [ ] rate limiting
 - [ ] улучшить health checks
 - [ ] деплоймент

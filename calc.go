@@ -28,12 +28,27 @@ type Config struct {
 	Alerting        Alerting             `yaml:"alerting"`
 	Prometheus      PrometheusConfig     `yaml:"prometheus"`
 	CircuitBreaker  CircuitBreakerConfig `yaml:"circuit_breaker"`
+	GracefulDeg    GracefulDegConfig    `yaml:"graceful_degradation"`
 }
 
 type CircuitBreakerConfig struct {
 	MaxFailures  int    `yaml:"max_failures"`
 	ResetTimeout string `yaml:"reset_timeout"`
 }
+
+type GracefulDegConfig struct {
+	EnableCache      bool   `yaml:"enable_cache"`
+	CacheTTL         string `yaml:"cache_ttl"`
+	MaxAge           string `yaml:"max_age"`
+	FallbackStrategy string `yaml:"fallback_strategy"`
+}
+
+const (
+	FallbackStrategyZero    = "zero"
+	FallbackStrategyAverage = "average"
+	FallbackStrategyLast    = "last_known"
+	FallbackStrategyNeutral = "neutral"
+)
 
 type Metric struct {
 	Name        string  `yaml:"name"`
@@ -85,6 +100,19 @@ type HealthCalculator struct {
 	mutex                     sync.RWMutex
 	circuitBreaker            *CircuitBreaker
 	circuitBreakerTripped     prometheus.Counter
+	// Graceful degradation fields
+	cachedValues              map[string]*CachedValue
+	degradedMode              prometheus.Gauge
+	fallbackUsed              prometheus.Counter
+	maxAgeDuration            time.Duration
+	isDegraded                bool // Track degraded state separately
+}
+
+// CachedValue хранит кэшированное значение метрики с метаданными
+type CachedValue struct {
+	Value     float64
+	Timestamp time.Time
+	Expires   time.Time
 }
 
 // NewHealthCalculator создает и инициализирует новый экземпляр калькулятора
@@ -116,8 +144,18 @@ func NewHealthCalculator() *HealthCalculator {
 		Help: "Total number of times the circuit breaker has opened",
 	})
 
+	degradedMode := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "health_calculator_degraded_mode",
+		Help: "Indicates if service is running in degraded mode (1 = degraded, 0 = normal)",
+	})
+
+	fallbackUsed := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "health_calculator_fallback_used_total",
+		Help: "Total number of times fallback values were used for metrics",
+	})
+
 	// Регистрируем все метрики в Prometheus registry
-	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped)
+	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed)
 
 	// Создаем circuit breaker с настройками по умолчанию
 	// Они будут обновлены при загрузке конфига
@@ -130,6 +168,10 @@ func NewHealthCalculator() *HealthCalculator {
 		metricsFailed:        metricsFailed,
 		calculationTime:      calculationTime,
 		circuitBreakerTripped: circuitBreakerTripped,
+			degradedMode:         degradedMode,
+			fallbackUsed:         fallbackUsed,
+			cachedValues:         make(map[string]*CachedValue),
+			maxAgeDuration:       10 * time.Minute, // по умолчанию
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -184,7 +226,12 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 			config.CircuitBreaker.MaxFailures, config.CircuitBreaker.ResetTimeout)
 	}
 
-	// Валидируем что сумма весов метрик = 1.0
+		// Обновляем настройки graceful degradation
+		if config.GracefulDeg.CacheTTL != "" {
+			hc.parseGracefulDegConfig(&config.GracefulDeg)
+		}
+
+		// Валидируем что сумма весов метрик = 1.0
 	totalWeight := 0.0
 	for _, metric := range config.Metrics {
 		totalWeight += metric.Weight
@@ -197,6 +244,43 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 	log.Printf("Config loaded successfully: %d metrics, update interval: %s",
 		len(config.Metrics), config.UpdateInterval)
 	return nil
+}
+
+// parseGracefulDegConfig парсит конфигурацию graceful degradation
+func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
+	if config.CacheTTL != "" {
+		if _, err := time.ParseDuration(config.CacheTTL); err != nil {
+			log.Printf("Invalid cache TTL in config, using default 5m: %v", err)
+			config.CacheTTL = "5m"
+		}
+	}
+
+	if config.MaxAge != "" {
+		maxAge, err := time.ParseDuration(config.MaxAge)
+		if err != nil {
+			log.Printf("Invalid max age in config, using default 10m: %v", err)
+			maxAge = 10 * time.Minute
+		}
+		hc.maxAgeDuration = maxAge
+	}
+
+	// Валидация fallback стратегии
+	validStrategies := map[string]bool{
+		FallbackStrategyZero:    true,
+		FallbackStrategyAverage: true,
+		FallbackStrategyLast:    true,
+		FallbackStrategyNeutral: true,
+	}
+
+	if !validStrategies[config.FallbackStrategy] {
+		log.Printf("Invalid fallback strategy '%s', using 'neutral'", config.FallbackStrategy)
+		config.FallbackStrategy = FallbackStrategyNeutral
+	} else if config.FallbackStrategy == "" {
+		config.FallbackStrategy = FallbackStrategyNeutral
+	}
+
+	log.Printf("Graceful degradation configured: cache=%v, ttl=%s, maxAge=%s, strategy=%s",
+		config.EnableCache, config.CacheTTL, config.MaxAge, config.FallbackStrategy)
 }
 
 // queryPrometheus выполняет запрос к Prometheus API
@@ -250,6 +334,91 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 		return floatValue, nil
 	default:
 		return 0, fmt.Errorf("unexpected value type: %T", value)
+	}
+}
+
+// cacheValue сохраняет значение в кэше
+func (hc *HealthCalculator) cacheValue(metricName string, value float64, ttl time.Duration) {
+	hc.mutex.Lock()
+	defer hc.mutex.Unlock()
+
+	hc.cachedValues[metricName] = &CachedValue{
+		Value:     value,
+		Timestamp: time.Now(),
+		Expires:   time.Now().Add(ttl),
+	}
+}
+
+// getCachedValue получает значение из кэша
+func (hc *HealthCalculator) getCachedValue(metricName string) (float64, bool) {
+	hc.mutex.RLock()
+	defer hc.mutex.RUnlock()
+
+	cached, exists := hc.cachedValues[metricName]
+	if !exists {
+		return 0, false
+	}
+
+	// Проверяем TTL
+	if time.Now().After(cached.Expires) {
+		return 0, false
+	}
+
+	return cached.Value, true
+}
+
+// getFallbackValue возвращает fallback значение на основе стратегии
+func (hc *HealthCalculator) getFallbackValue(metricName string, metric Metric) float64 {
+	hc.mutex.RLock()
+	defer hc.mutex.RUnlock()
+
+	// Защита от nil в тестах
+	if hc.fallbackUsed != nil {
+		hc.fallbackUsed.Inc()
+	}
+
+	switch hc.config.GracefulDeg.FallbackStrategy {
+	case FallbackStrategyZero:
+		log.Printf("Using zero fallback for metric %s", metricName)
+		return 0
+	case FallbackStrategyNeutral:
+		log.Printf("Using neutral fallback (0.5) for metric %s", metricName)
+		return 0.5
+	case FallbackStrategyLast:
+		if cachedValue, exists := hc.getCachedValue(metricName); exists {
+			// getCachedValue уже проверил TTL
+			log.Printf("Using last known value %.4f for metric %s",
+				cachedValue, metricName)
+			return cachedValue
+		}
+		log.Printf("No valid cached value for metric %s, using neutral fallback", metricName)
+		return 0.5
+	case FallbackStrategyAverage:
+		// Возвращаем среднюю точку диапазона
+		avg := (metric.MinValue + metric.MaxValue) / 2
+		log.Printf("Using average fallback %.4f for metric %s", avg, metricName)
+		// Нормализуем к диапазону 0-1
+		rangeSize := metric.MaxValue - metric.MinValue
+		if rangeSize == 0 {
+			return 1.0
+		}
+		return (avg - metric.MinValue) / rangeSize
+	default:
+		log.Printf("Unknown fallback strategy, using neutral for metric %s", metricName)
+		return 0.5
+	}
+}
+
+// cleanupExpiredCache удаляет просроченные значения из кэша
+func (hc *HealthCalculator) cleanupExpiredCache() {
+	hc.mutex.Lock()
+	defer hc.mutex.Unlock()
+
+	now := time.Now()
+	for name, cached := range hc.cachedValues {
+		if now.After(cached.Expires) {
+			delete(hc.cachedValues, name)
+		}
 	}
 }
 
@@ -355,50 +524,97 @@ func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64
 	return (value - metric.MinValue) / rangeSize
 }
 
-// calculateHealthScore - основная функция расчета health score
+// calculateHealthScore - основная функция расчета health score с graceful degradation
 func (hc *HealthCalculator) calculateHealthScore() {
 	startTime := time.Now()
 
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
 
+	// Очищаем просроченные кэши
+	hc.cleanupExpiredCache()
+
 	totalScore := 0.0
 	validMetrics := 0
+	degradedMetrics := 0
+	var cacheTTL time.Duration
+
+	// Определяем TTL кэша из конфига
+	if hc.config != nil && hc.config.GracefulDeg.EnableCache {
+		var err error
+		cacheTTL, err = time.ParseDuration(hc.config.GracefulDeg.CacheTTL)
+		if err != nil {
+			log.Printf("Invalid cache TTL, using default 5m: %v", err)
+			cacheTTL = 5 * time.Minute
+		}
+	}
 
 	for _, metric := range hc.config.Metrics {
-		value, err := hc.queryPrometheusWithRetry(metric.Query, metric.Name)
-		if err != nil {
-			log.Printf("Failed to get metric %s: %v", metric.Name, err)
-			continue
+		var normalizedValue float64
+		var value float64
+		var err error
+		var usedFallback bool
+
+		// Пытаемся получить значение из кэша
+		if cachedValue, exists := hc.getCachedValue(metric.Name); exists && hc.config.GracefulDeg.EnableCache {
+			value = cachedValue
+			log.Printf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
+		} else {
+			// Запрашиваем свежее значение
+			value, err = hc.queryPrometheusWithRetry(metric.Query, metric.Name)
+
+			if err != nil {
+				log.Printf("Failed to get metric %s, using fallback: %v", metric.Name, err)
+				value = hc.getFallbackValue(metric.Name, metric)
+				usedFallback = true
+				degradedMetrics++
+			} else {
+				// Кэшируем успешное значение
+				if hc.config.GracefulDeg.EnableCache {
+					hc.cacheValue(metric.Name, value, cacheTTL)
+				}
+			}
 		}
 
-		normalizedValue := hc.normalizeValue(value, metric)
+		normalizedValue = hc.normalizeValue(value, metric)
 		hc.metricValues[metric.Name] = normalizedValue
 
 		totalScore += normalizedValue * metric.Weight
 		validMetrics++
+
+		if usedFallback {
+			log.Printf("Metric %s used fallback value: %.4f (normalized: %.4f)",
+				metric.Name, value, normalizedValue)
+		}
 	}
 
-	if validMetrics == 0 {
-		log.Printf("No valid metrics available, setting health score to 0")
-		hc.healthScore.Set(0)
-		return
+	// Calculate degradation factor
+	degradationFactor := 1.0
+	if degradedMetrics > 0 {
+		// Чем больше метрик используют fallback, тем больше снижение
+		degradationFactor = 1.0 - (float64(degradedMetrics) / float64(len(hc.config.Metrics)) * 0.3)
+		log.Printf("Degradation: %d/%d metrics using fallback, factor: %.2f",
+			degradedMetrics, len(hc.config.Metrics), degradationFactor)
 	}
 
-	// Если некоторые метрики недоступны, корректируем score пропорционально
-	if validMetrics < len(hc.config.Metrics) {
-		adjustment := float64(validMetrics) / float64(len(hc.config.Metrics))
-		totalScore *= adjustment
-		log.Printf("Only %d/%d metrics available, adjusted score by factor %.2f",
-			validMetrics, len(hc.config.Metrics), adjustment)
+	// Применяем фактор деградации
+	finalScore := totalScore * degradationFactor
+
+	// Обновляем метрику degraded mode и флаг
+	if degradedMetrics > 0 {
+		hc.degradedMode.Set(1)
+		hc.isDegraded = true
+	} else {
+		hc.degradedMode.Set(0)
+		hc.isDegraded = false
 	}
 
-	hc.healthScore.Set(totalScore)
+	hc.healthScore.Set(finalScore)
 	hc.lastSuccessfulCalculation = time.Now()
 	hc.calculationTime.Observe(time.Since(startTime).Seconds())
 
-	log.Printf("Health score updated: %.4f (from %d/%d metrics, calculation took %v)",
-		totalScore, validMetrics, len(hc.config.Metrics), time.Since(startTime))
+	log.Printf("Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",
+		finalScore, validMetrics, degradedMetrics, degradationFactor, time.Since(startTime))
 }
 
 // circuitBreakerHandler - HTTP handler для отображения состояния circuit breaker
@@ -430,27 +646,53 @@ func (hc *HealthCalculator) circuitBreakerHandler(w http.ResponseWriter, r *http
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
 	hc.mutex.RLock()
 	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
+	isDegraded := hc.isDegraded
+	circuitOpen := hc.circuitBreaker.State() == StateOpen
 	hc.mutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Если последний расчет был более 10 минут назад - считаем сервис unhealthy
-	if lastUpdate > 10*time.Minute {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":    "unhealthy",
-			"reason":    fmt.Sprintf("last calculation too old: %v", lastUpdate),
-			"timestamp": hc.lastSuccessfulCalculation.Format(time.RFC3339),
-		})
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":                      "healthy",
+	status := "healthy"
+	statusCode := http.StatusOK
+	response := map[string]interface{}{
+		"status":                      status,
 		"last_successful_calculation": hc.lastSuccessfulCalculation.Format(time.RFC3339),
 		"age":                         lastUpdate.String(),
-	})
+		"degraded":                    isDegraded,
+		"circuit_breaker": map[string]interface{}{
+			"state": func() string {
+				switch hc.circuitBreaker.State() {
+				case StateClosed:
+					return "closed"
+				case StateOpen:
+					return "open"
+				case StateHalfOpen:
+					return "half-open"
+				default:
+					return "unknown"
+				}
+			}(),
+		},
+	}
+
+	// Определяем общий статус
+	if lastUpdate > 10*time.Minute {
+		status = "unhealthy"
+		statusCode = http.StatusServiceUnavailable
+		response["status"] = status
+		response["reason"] = fmt.Sprintf("last calculation too old: %v", lastUpdate)
+	} else if isDegraded {
+		status = "degraded"
+		response["status"] = status
+		response["reason"] = "some metrics are using fallback values"
+	} else if circuitOpen {
+		status = "degraded"
+		response["status"] = status
+		response["reason"] = "circuit breaker is open"
+	}
+
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(response)
 }
 
 // Start запускает основной цикл работы сервиса
