@@ -23,10 +23,16 @@ import (
 
 // Config structures - определяют структуру конфигурационного файла
 type Config struct {
-	UpdateInterval string           `yaml:"update_interval"`
-	Metrics        []Metric         `yaml:"metrics"`
-	Alerting       Alerting         `yaml:"alerting"`
-	Prometheus     PrometheusConfig `yaml:"prometheus"`
+	UpdateInterval  string               `yaml:"update_interval"`
+	Metrics         []Metric             `yaml:"metrics"`
+	Alerting        Alerting             `yaml:"alerting"`
+	Prometheus      PrometheusConfig     `yaml:"prometheus"`
+	CircuitBreaker  CircuitBreakerConfig `yaml:"circuit_breaker"`
+}
+
+type CircuitBreakerConfig struct {
+	MaxFailures  int    `yaml:"max_failures"`
+	ResetTimeout string `yaml:"reset_timeout"`
 }
 
 type Metric struct {
@@ -77,6 +83,8 @@ type HealthCalculator struct {
 	prometheusDownCount       int
 	httpClient                *http.Client
 	mutex                     sync.RWMutex
+	circuitBreaker            *CircuitBreaker
+	circuitBreakerTripped     prometheus.Counter
 }
 
 // NewHealthCalculator создает и инициализирует новый экземпляр калькулятора
@@ -103,18 +111,29 @@ func NewHealthCalculator() *HealthCalculator {
 		Buckets: []float64{0.1, 0.5, 1.0, 2.0, 5.0},
 	})
 
+	circuitBreakerTripped := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "health_calculator_circuit_breaker_tripped_total",
+		Help: "Total number of times the circuit breaker has opened",
+	})
+
 	// Регистрируем все метрики в Prometheus registry
-	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime)
+	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped)
+
+	// Создаем circuit breaker с настройками по умолчанию
+	// Они будут обновлены при загрузке конфига
+	cb := NewCircuitBreaker("prometheus", 3, 30*time.Second)
 
 	return &HealthCalculator{
-		healthScore:     healthScore,
-		metricValues:    make(map[string]float64),
-		metricsFetched:  metricsFetched,
-		metricsFailed:   metricsFailed,
-		calculationTime: calculationTime,
+		healthScore:          healthScore,
+		metricValues:         make(map[string]float64),
+		metricsFetched:       metricsFetched,
+		metricsFailed:        metricsFailed,
+		calculationTime:      calculationTime,
+		circuitBreakerTripped: circuitBreakerTripped,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		circuitBreaker: cb,
 	}
 }
 
@@ -142,6 +161,28 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 		timeout = 30 * time.Second
 	}
 	hc.httpClient.Timeout = timeout
+
+	// Обновляем настройки circuit breaker
+	if config.CircuitBreaker.MaxFailures > 0 {
+		resetTimeout, err := time.ParseDuration(config.CircuitBreaker.ResetTimeout)
+		if err != nil {
+			log.Printf("Invalid circuit breaker reset timeout, using default 30s: %v", err)
+			resetTimeout = 30 * time.Second
+		}
+
+		// Создаем новый circuit breaker с обновленными настройками
+		cb := NewCircuitBreaker("prometheus", config.CircuitBreaker.MaxFailures, resetTimeout)
+
+		// Устанавливаем callback для логирования изменений состояния
+		cb.SetStateChangeCallback(func(name string, from, to CircuitBreakerState) {
+			log.Printf("Circuit breaker '%s' changed state from %v to %v", name, from, to)
+			hc.circuitBreakerTripped.Inc()
+		})
+
+		hc.circuitBreaker = cb
+		log.Printf("Circuit breaker updated: max_failures=%d, reset_timeout=%s",
+			config.CircuitBreaker.MaxFailures, config.CircuitBreaker.ResetTimeout)
+	}
 
 	// Валидируем что сумма весов метрик = 1.0
 	totalWeight := 0.0
@@ -212,35 +253,56 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 	}
 }
 
-// queryPrometheusWithRetry выполняет запрос с ретраями
+// queryPrometheusWithRetry выполняет запрос через circuit breaker и с ретраями
 func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName string) (float64, error) {
-	var lastErr error
-	maxRetries := 3
+	// Используем circuit breaker для защиты от каскадных сбоев
+	var result float64
+	var err error
 
-	for i := 0; i < maxRetries; i++ {
-		value, err := hc.queryPrometheus(query)
-		if err == nil {
-			hc.prometheusDownCount = 0 // Сбрасываем счетчик при успехе
-			hc.metricsFetched.Inc()
-			return value, nil
+	cbErr := hc.circuitBreaker.Execute(func() error {
+		var lastErr error
+		maxRetries := 3
+
+		for i := 0; i < maxRetries; i++ {
+			value, queryErr := hc.queryPrometheus(query)
+			if queryErr == nil {
+				result = value
+				hc.prometheusDownCount = 0 // Сбрасываем счетчик при успехе
+				hc.metricsFetched.Inc()
+				return nil // Успех
+			}
+
+			lastErr = queryErr
+			hc.metricsFailed.Inc()
+			log.Printf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, queryErr)
+
+			// Exponential backoff: 1s, 2s, 3s
+			time.Sleep(time.Duration(i+1) * time.Second)
 		}
 
-		lastErr = err
-		hc.metricsFailed.Inc()
-		log.Printf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, err)
+		err = lastErr
 
-		// Exponential backoff: 1s, 2s, 3s
-		time.Sleep(time.Duration(i+1) * time.Second)
+		// Все ретраи провалились
+		hc.prometheusDownCount++
+		if hc.config != nil && hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
+			hc.sendAlert(fmt.Sprintf("🚨 Prometheus unavailable after %d attempts. Last error: %v",
+				hc.prometheusDownCount, lastErr))
+		}
+
+		return fmt.Errorf("all retries failed: %v", lastErr)
+	})
+
+	if cbErr == ErrCircuitBreakerOpen {
+		// Circuit breaker открыт - возвращаем дефолтное значение
+		log.Printf("Circuit breaker is open, using fallback value for metric %s", metricName)
+		return 0.5, nil // Возвращаем нейтральное значение 0.5
 	}
 
-	// Все ретраи провалились
-	hc.prometheusDownCount++
-	if hc.config != nil && hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
-		hc.sendAlert(fmt.Sprintf("🚨 Prometheus unavailable after %d attempts. Last error: %v",
-			hc.prometheusDownCount, lastErr))
+	if err != nil {
+		return 0, err
 	}
 
-	return 0, fmt.Errorf("all retries failed: %v", lastErr)
+	return result, nil
 }
 
 // sendAlert отправляет уведомление в Telegram
@@ -339,6 +401,31 @@ func (hc *HealthCalculator) calculateHealthScore() {
 		totalScore, validMetrics, len(hc.config.Metrics), time.Since(startTime))
 }
 
+// circuitBreakerHandler - HTTP handler для отображения состояния circuit breaker
+func (hc *HealthCalculator) circuitBreakerHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	state := hc.circuitBreaker.State()
+	stateName := "unknown"
+	switch state {
+	case StateClosed:
+		stateName = "closed"
+	case StateOpen:
+		stateName = "open"
+	case StateHalfOpen:
+		stateName = "half-open"
+	}
+
+	response := map[string]interface{}{
+		"name":     hc.circuitBreaker.name,
+		"state":    stateName,
+		"failures": hc.circuitBreaker.Failures(),
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
 // healthHandler - HTTP handler для health checks
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
 	hc.mutex.RLock()
@@ -428,6 +515,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())          // Prometheus metrics endpoint
 	mux.HandleFunc("/health", calculator.healthHandler) // Health check endpoint
+	mux.HandleFunc("/circuit-breaker", calculator.circuitBreakerHandler) // Circuit breaker status endpoint
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Health Calculator Service"))
