@@ -96,7 +96,17 @@
 - возвращает JSON с деталями статуса
 - показывает degraded статус при использовании fallback
 
-### 8. Безопасность:
+### 8. Rate Limiting:
+
+Защищает сервис от перегрузки и злоупотреблений:
+
+- **Leaky bucket алгоритм** с настраиваемыми лимитами
+- **Уровни лимитов:** глобальные и per-IP для разных endpoints
+- **Whitelist:** IP адреса без лимитов (localhost по умолчанию)
+- **Мониторинг:** метрики `health_calculator_rate_limit_exceeded_total` и `health_calculator_active_rate_limit_clients`
+- **HTTP 429:** graceful обработка превышения лимитов с JSON ошибкой
+
+### 9. Безопасность:
 
 - таймауты на HTTP запросы
 
@@ -122,7 +132,7 @@
 - [x] circuit breaker
 - [ ] structured logging
 - [x] graceful degradation
-- [ ] rate limiting
+- [x] rate limiting
 - [ ] улучшить health checks
 - [ ] деплоймент
 - [ ] алертинг рулз

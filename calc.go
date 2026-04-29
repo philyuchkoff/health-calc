@@ -29,6 +29,7 @@ type Config struct {
 	Prometheus      PrometheusConfig     `yaml:"prometheus"`
 	CircuitBreaker  CircuitBreakerConfig `yaml:"circuit_breaker"`
 	GracefulDeg    GracefulDegConfig    `yaml:"graceful_degradation"`
+	RateLimit       RateLimitConfig      `yaml:"rate_limit"`
 }
 
 type CircuitBreakerConfig struct {
@@ -106,6 +107,10 @@ type HealthCalculator struct {
 	fallbackUsed              prometheus.Counter
 	maxAgeDuration            time.Duration
 	isDegraded                bool // Track degraded state separately
+	// Rate limiting fields
+	rateLimiter               *RateLimiter
+	rateLimitExceeded         prometheus.Counter
+	activeClients             prometheus.Gauge
 }
 
 // CachedValue хранит кэшированное значение метрики с метаданными
@@ -154,8 +159,18 @@ func NewHealthCalculator() *HealthCalculator {
 		Help: "Total number of times fallback values were used for metrics",
 	})
 
+	rateLimitExceeded := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "health_calculator_rate_limit_exceeded_total",
+		Help: "Total number of requests blocked by rate limiting",
+	})
+
+	activeClients := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "health_calculator_active_rate_limit_clients",
+		Help: "Number of active clients tracked by rate limiter",
+	})
+
 	// Регистрируем все метрики в Prometheus registry
-	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed)
+	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients)
 
 	// Создаем circuit breaker с настройками по умолчанию
 	// Они будут обновлены при загрузке конфига
@@ -174,9 +189,12 @@ func NewHealthCalculator() *HealthCalculator {
 			maxAgeDuration:       10 * time.Minute, // по умолчанию
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
-		},
-		circuitBreaker: cb,
-	}
+	},
+	circuitBreaker: cb,
+	rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
+	rateLimitExceeded: rateLimitExceeded,
+	activeClients: activeClients,
+}
 }
 
 // loadConfig загружает и парсит конфигурационный файл
@@ -229,6 +247,13 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 		// Обновляем настройки graceful degradation
 		if config.GracefulDeg.CacheTTL != "" {
 			hc.parseGracefulDegConfig(&config.GracefulDeg)
+		}
+
+		// Обновляем настройки rate limiting
+		hc.rateLimiter = NewRateLimiter(config.RateLimit)
+		if config.RateLimit.Enabled {
+			log.Printf("Rate limiting enabled with %d global rules and %d per-IP rules",
+				len(config.RateLimit.GlobalRate), len(config.RateLimit.PerIPRate))
 		}
 
 		// Валидируем что сумма весов метрик = 1.0
@@ -642,6 +667,15 @@ func (hc *HealthCalculator) circuitBreakerHandler(w http.ResponseWriter, r *http
 	json.NewEncoder(w).Encode(response)
 }
 
+// wrapWithRateLimit оборачивает handler в rate limiting middleware
+func (hc *HealthCalculator) wrapWithRateLimit(handler http.HandlerFunc) http.HandlerFunc {
+	metrics := &RateLimitMetrics{
+		rateLimitExceeded: hc.rateLimitExceeded,
+		activeClients:     hc.activeClients,
+	}
+	return RateLimitMiddleware(hc.rateLimiter, metrics, handler)
+}
+
 // healthHandler - HTTP handler для health checks
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
 	hc.mutex.RLock()
@@ -705,6 +739,9 @@ func (hc *HealthCalculator) Start(ctx context.Context) error {
 	// Запускаем фоновое обновление конфига
 	go hc.watchConfig(ctx)
 
+	// Запускаем очистку rate limiter buckets
+	go hc.cleanupRateLimitBuckets(ctx)
+
 	// Парсим интервал обновления из конфига
 	interval, err := time.ParseDuration(hc.config.UpdateInterval)
 	if err != nil {
@@ -727,6 +764,21 @@ func (hc *HealthCalculator) Start(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			hc.calculateHealthScore()
+		}
+	}
+}
+
+// cleanupRateLimitBuckets периодически очищает неиспользуемые bucket'ы
+func (hc *HealthCalculator) cleanupRateLimitBuckets(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			hc.rateLimiter.CleanupExpiredBuckets()
 		}
 	}
 }
@@ -755,9 +807,13 @@ func main() {
 
 	// Настраиваем HTTP сервер
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())          // Prometheus metrics endpoint
-	mux.HandleFunc("/health", calculator.healthHandler) // Health check endpoint
-	mux.HandleFunc("/circuit-breaker", calculator.circuitBreakerHandler) // Circuit breaker status endpoint
+	mux.Handle("/metrics", promhttp.Handler()) // Prometheus metrics endpoint (no rate limit)
+	mux.HandleFunc("/health", calculator.wrapWithRateLimit(calculator.healthHandler))
+	mux.HandleFunc("/circuit-breaker", calculator.wrapWithRateLimit(calculator.circuitBreakerHandler))
+	mux.HandleFunc("/", calculator.wrapWithRateLimit(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Health Calculator Service"))
+	}))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Health Calculator Service"))

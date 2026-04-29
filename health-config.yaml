@@ -53,3 +53,16 @@ alerting:
 prometheus:
   url: "http://prometheus:9090"
   timeout: "30s"
+
+# Rate limiting configuration
+rate_limit:
+  enabled: true
+  global_rate:
+    "/metrics": "100/m"
+    "/health": "60/m"
+  per_ip_rate:
+    "/health": "10/m"
+    "/circuit-breaker": "20/m"
+  whitelist:
+    - "127.0.0.1"
+    - "::1"  # IPv6 localhost
