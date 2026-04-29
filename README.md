@@ -109,21 +109,94 @@
 ### 9. Безопасность:
 
 - таймауты на HTTP запросы
-
 - ReadOnly монтирование конфига
-
 - обработка ошибок на всех уровнях
 
   
  #### Сервис будет доступен на порту 8080 с endpoints:
 
 -   `/metrics` - Prometheus метрики
-    
 -   `/health` - health check для Kubernetes
-    
 -   `/circuit-breaker` - статус circuit breaker
-    
 -   `/` - простой status page
+
+## Запуск сервиса
+
+### Локально
+
+1. Установка зависимостей:
+```bash
+go mod download
+```
+
+2. Создание конфигурационного файла:
+```bash
+cp health-config.yaml.example health-config.yaml
+# Отредактируйте под вашу среду
+```
+
+3. Запуск:
+```bash
+# Dev
+go run .
+
+# Prod
+go build -o health-calc
+./health-calc
+```
+
+### В Docker
+
+1. Сборка:
+```bash
+docker build -t health-calculator .
+```
+
+2. Запуск:
+```bash
+docker run -p 8080:8080 \
+  -e TELEGRAM_BOT_TOKEN="your_token" \
+  -e TELEGRAM_CHAT_ID="your_chat_id" \
+  health-calculator
+```
+
+### health-config.yaml
+
+Основные настройки:
+```yaml
+# Интервал обновления метрик
+update_interval: "5m"
+
+# URL Prometheus сервера
+prometheus:
+  url: "http://prometheus:9090"
+  timeout: "30s"
+
+# Настройки метрик с весами (должны суммироваться в 1.0)
+metrics:
+  - name: "cpu_usage"
+    prometheus_query: "avg(100 - avg(irate(node_cpu_seconds_total{mode='idle'}[5m])) * 100"
+    weight: 0.25
+    min_valid_value: 0.0
+    max_valid_value: 100.0
+```
+
+### Проверка работы
+
+1. Health check:
+```bash
+curl http://localhost:8080/health
+```
+
+2. Получение health score:
+```bash
+curl http://localhost:8080/metrics | grep platform_health_score
+```
+
+3. Статус circuit breaker:
+```bash
+curl http://localhost:8080/circuit-breaker
+```
 
 ## надо добавить:
 - [x] graceful shutdown
