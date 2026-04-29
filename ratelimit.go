@@ -36,6 +36,7 @@ type RateLimitConfig struct {
 	Whitelist  []string          `yaml:"whitelist"`        // IP whitelist
 }
 
+
 // NewRateLimiter создает новый rate limiter
 func NewRateLimiter(config RateLimitConfig) *RateLimiter {
 	return &RateLimiter{

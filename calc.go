@@ -30,6 +30,7 @@ type Config struct {
 	CircuitBreaker  CircuitBreakerConfig `yaml:"circuit_breaker"`
 	GracefulDeg    GracefulDegConfig    `yaml:"graceful_degradation"`
 	RateLimit       RateLimitConfig      `yaml:"rate_limit"`
+	Logging         LoggingConfig        `yaml:"logging"`
 }
 
 type CircuitBreakerConfig struct {
@@ -111,6 +112,8 @@ type HealthCalculator struct {
 	rateLimiter               *RateLimiter
 	rateLimitExceeded         prometheus.Counter
 	activeClients             prometheus.Gauge
+	// Logging
+	logger                   *Logger
 }
 
 // CachedValue хранит кэшированное значение метрики с метаданными
@@ -191,7 +194,15 @@ func NewHealthCalculator() *HealthCalculator {
 			Timeout: 30 * time.Second,
 	},
 	circuitBreaker: cb,
-	rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
+	logger: func() *Logger {
+		logger := NewLogger(LoggingConfig{
+			Level: "info",
+			Format: "json",
+			Service: "health-calculator",
+		})
+		logger.Info("Health calculator service initialized")
+		return logger
+	}(),	rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
 	rateLimitExceeded: rateLimitExceeded,
 	activeClients: activeClients,
 }
@@ -199,9 +210,21 @@ func NewHealthCalculator() *HealthCalculator {
 
 // loadConfig загружает и парсит конфигурационный файл
 func (hc *HealthCalculator) loadConfig(configPath string) error {
+	ctx := context.Background()
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config: %v", err)
+	}
+
+	// Initialize logger if not set
+	if hc.logger == nil {
+		hc.logger = NewLogger(LoggingConfig{
+			Level:   "info",
+			Format:  "json",
+			Service: "health-calculator",
+		})
+		hc.logger.Info("Logger initialized (default config)")
 	}
 
 	// Заменяем переменные окружения в конфиге (например ${TELEGRAM_BOT_TOKEN})
@@ -217,7 +240,8 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 	// Парсим timeout из конфига
 	timeout, err := time.ParseDuration(config.Prometheus.Timeout)
 	if err != nil {
-		log.Printf("Invalid timeout format, using default 30s: %v", err)
+		hc.logger.WithContextFields(ctx, SourceConfig).Warnf(
+			"Invalid timeout format, using default 30s: %v", err)
 		timeout = 30 * time.Second
 	}
 	hc.httpClient.Timeout = timeout
@@ -244,6 +268,14 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 			config.CircuitBreaker.MaxFailures, config.CircuitBreaker.ResetTimeout)
 	}
 
+		// Обновляем настройки логирования
+		if config.Logging.Service != "" {
+			hc.logger = NewLogger(config.Logging)
+			hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Info(
+				"Logging configuration updated",
+			)
+		}
+
 		// Обновляем настройки graceful degradation
 		if config.GracefulDeg.CacheTTL != "" {
 			hc.parseGracefulDegConfig(&config.GracefulDeg)
@@ -252,8 +284,10 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 		// Обновляем настройки rate limiting
 		hc.rateLimiter = NewRateLimiter(config.RateLimit)
 		if config.RateLimit.Enabled {
-			log.Printf("Rate limiting enabled with %d global rules and %d per-IP rules",
-				len(config.RateLimit.GlobalRate), len(config.RateLimit.PerIPRate))
+			hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Infof(
+				"Rate limiting enabled with %d global rules and %d per-IP rules",
+				len(config.RateLimit.GlobalRate), len(config.RateLimit.PerIPRate),
+			)
 		}
 
 		// Валидируем что сумма весов метрик = 1.0
@@ -479,7 +513,7 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 		// Все ретраи провалились
 		hc.prometheusDownCount++
 		if hc.config != nil && hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
-			hc.sendAlert(fmt.Sprintf("🚨 Prometheus unavailable after %d attempts. Last error: %v",
+			hc.sendAlert(context.Background(), fmt.Sprintf("🚨 Prometheus unavailable after %d attempts. Last error: %v",
 				hc.prometheusDownCount, lastErr))
 		}
 
@@ -500,9 +534,11 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 }
 
 // sendAlert отправляет уведомление в Telegram
-func (hc *HealthCalculator) sendAlert(message string) {
+func (hc *HealthCalculator) sendAlert(ctx context.Context, message string) {
+	logger := hc.logger.WithContextFields(ctx, SourceAlerting)
+
 	if hc.config == nil || hc.config.Alerting.Telegram.BotToken == "" || hc.config.Alerting.Telegram.ChatID == "" {
-		log.Printf("ALERT would be sent: %s", message)
+		logger.WithField("message", message).Warn("ALERT would be sent - no Telegram credentials configured")
 		return
 	}
 
@@ -518,15 +554,15 @@ func (hc *HealthCalculator) sendAlert(message string) {
 
 	resp, err := hc.httpClient.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
-		log.Printf("Failed to send Telegram alert: %v", err)
+		hc.logger.WithError(err, SourceAlerting).Error("Failed to send Telegram alert")
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Telegram API returned non-200 status: %d", resp.StatusCode)
+		logger.WithField("status_code", resp.StatusCode).Error("Telegram API returned non-200 status")
 	} else {
-		log.Printf("Telegram alert sent successfully")
+		logger.Info("Telegram alert sent successfully")
 	}
 }
 
@@ -552,6 +588,8 @@ func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64
 // calculateHealthScore - основная функция расчета health score с graceful degradation
 func (hc *HealthCalculator) calculateHealthScore() {
 	startTime := time.Now()
+
+	ctx := ContextWithRequestID(context.Background(), GenerateRequestID())
 
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
@@ -618,8 +656,10 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	if degradedMetrics > 0 {
 		// Чем больше метрик используют fallback, тем больше снижение
 		degradationFactor = 1.0 - (float64(degradedMetrics) / float64(len(hc.config.Metrics)) * 0.3)
-		log.Printf("Degradation: %d/%d metrics using fallback, factor: %.2f",
-			degradedMetrics, len(hc.config.Metrics), degradationFactor)
+		hc.logger.WithModule(ctx, SourceCalculator, "score_calc").Infof(
+			"Degradation: %d/%d metrics using fallback, factor: %.2f",
+			degradedMetrics, len(hc.config.Metrics), degradationFactor,
+		)
 	}
 
 	// Применяем фактор деградации
@@ -678,6 +718,8 @@ func (hc *HealthCalculator) wrapWithRateLimit(handler http.HandlerFunc) http.Han
 
 // healthHandler - HTTP handler для health checks
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := ContextWithRequestID(context.Background(), GenerateRequestID())
+
 	hc.mutex.RLock()
 	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
 	isDegraded := hc.isDegraded
@@ -801,9 +843,8 @@ func (hc *HealthCalculator) watchConfig(ctx context.Context) {
 }
 
 func main() {
-	log.Println("Starting Health Calculator Service...")
-
 	calculator := NewHealthCalculator()
+	calculator.logger.Info("Starting Health Calculator Service...")
 
 	// Настраиваем HTTP сервер
 	mux := http.NewServeMux()
