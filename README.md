@@ -89,7 +89,8 @@
  #### Сервис будет доступен на порту 8080 с endpoints:
 
 -   `/metrics` - Prometheus метрики
--   `/health` - health check для Kubernetes
+-   `/health` - health check для Kubernetes (liveness probe)
+-   `/ready` - readiness probe для Kubernetes
 -   `/circuit-breaker` - статус circuit breaker
 -   `/` - простой status page
 
@@ -102,10 +103,10 @@
 go mod download
 ```
 
-2. Создание конфигурационного файла:
+2. Редактирование конфигурационного файла:
 ```bash
-cp health-config.yaml.example health-config.yaml
-# Отредактируйте под вашу среду
+cp health-config.yaml health-config.yaml.bak
+# Отредактируйте health-config.yaml под вашу среду
 ```
 
 3. Запуск:
@@ -135,23 +136,42 @@ docker run -p 8080:8080 \
 
 ### health-config.yaml
 
+Полный пример: [health-config.yaml](./health-config.yaml)
+
 Основные настройки:
 ```yaml
-# Интервал обновления метрик
 update_interval: "5m"
 
-# URL Prometheus сервера
 prometheus:
   url: "http://prometheus:9090"
   timeout: "30s"
 
-# Настройки метрик с весами (должны суммироваться в 1.0)
+circuit_breaker:
+  max_failures: 3
+  reset_timeout: "30s"
+
+graceful_degradation:
+  enable_cache: true
+  cache_ttl: "5m"
+  max_age: "10m"
+  fallback_strategy: "neutral"
+
+rate_limit:
+  enabled: true
+  global_rate:
+    "/metrics": "100/m"
+    "/health": "60/m"
+  per_ip_rate:
+    "/health": "10/m"
+  whitelist:
+    - "127.0.0.1"
+
 metrics:
-  - name: "cpu_usage"
-    prometheus_query: "avg(100 - avg(irate(node_cpu_seconds_total{mode='idle'}[5m])) * 100"
-    weight: 0.25
+  - name: "synthetic_uptime"
+    prometheus_query: 'avg(synthetic_check_success{environment="production"})'
+    weight: 0.4
     min_valid_value: 0.0
-    max_valid_value: 100.0
+    max_valid_value: 1.0
 ```
 
 ### Проверка работы
@@ -171,14 +191,14 @@ curl http://localhost:8080/metrics | grep platform_health_score
 curl http://localhost:8080/circuit-breaker
 ```
 
-## надо добавить:
+## Реализовано:
 - [x] graceful shutdown
 - [x] метрики для мониторинга самого сервиса
-- [x] хелсчек с бизнес-логикой
+- [x] хелсчек с бизнес-логикой (/health + /ready)
 - [x] circuit breaker
 - [x] structured logging
 - [x] graceful degradation
 - [x] rate limiting
-- [ ] улучшить health checks
-- [ ] деплоймент
-- [ ] алертинг рулз
+- [x] Dockerfile
+- [x] CI (GitHub Actions)
+- [x] panic recovery middleware

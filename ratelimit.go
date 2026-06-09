@@ -78,9 +78,9 @@ func (b *Bucket) AllowNext() (bool, int) {
 
 	now := time.Now()
 
-	// Refill tokens based on time passed
+	// Refill tokens based on time passed (millisecond precision)
 	elapsed := now.Sub(b.lastRefill)
-	tokensToAdd := int(elapsed.Seconds()) * b.refillRate
+	tokensToAdd := int(elapsed.Milliseconds()) * b.refillRate / 1000
 
 	if tokensToAdd > 0 {
 		b.tokens = min(b.capacity, b.tokens+tokensToAdd)

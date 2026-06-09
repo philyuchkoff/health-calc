@@ -94,8 +94,9 @@ func TestGetFallbackValue(t *testing.T) {
 
 func TestCleanupExpiredCache(t *testing.T) {
 	hc := &HealthCalculator{
-		cachedValues: make(map[string]*CachedValue),
-		logger:       NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		cachedValues:   make(map[string]*CachedValue),
+		logger:         NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		maxAgeDuration: 10 * time.Minute,
 	}
 
 	// Add some values

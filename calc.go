@@ -113,6 +113,10 @@ type HealthCalculator struct {
 	activeClients     prometheus.Gauge
 	// Config reload tracking
 	configReloadTotal prometheus.Counter
+	// Uptime tracking
+	startTime             time.Time
+	serviceUptime         prometheus.Gauge
+	prometheusConnErrors  prometheus.Counter
 	// Logging
 	logger *Logger
 }
@@ -178,7 +182,17 @@ func NewHealthCalculator() *HealthCalculator {
 		Help: "Total number of config reload attempts",
 	})
 
-	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients, configReloadTotal)
+	serviceUptime := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "service_uptime_seconds",
+		Help: "Time since the service started",
+	})
+
+	prometheusConnErrors := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "health_calculator_prometheus_connection_errors_total",
+		Help: "Total number of connection errors to Prometheus",
+	})
+
+	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients, configReloadTotal, serviceUptime, prometheusConnErrors)
 
 	// Создаем circuit breaker с настройками по умолчанию
 	// Они будут обновлены при загрузке конфига
@@ -208,9 +222,12 @@ func NewHealthCalculator() *HealthCalculator {
 			logger.Info("Health calculator service initialized")
 			return logger
 		}(), rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
-		rateLimitExceeded: rateLimitExceeded,
-		activeClients:     activeClients,
-		configReloadTotal: configReloadTotal,
+		rateLimitExceeded:     rateLimitExceeded,
+		activeClients:         activeClients,
+		configReloadTotal:     configReloadTotal,
+		startTime:             time.Now(),
+		serviceUptime:         serviceUptime,
+		prometheusConnErrors:  prometheusConnErrors,
 	}
 }
 
@@ -505,8 +522,9 @@ func (hc *HealthCalculator) cleanupExpiredCache() {
 	defer hc.mutex.Unlock()
 
 	now := time.Now()
+	maxAge := hc.maxAgeDuration
 	for name, cached := range hc.cachedValues {
-		if now.After(cached.Expires) {
+		if now.After(cached.Expires) || now.After(cached.Timestamp.Add(maxAge)) {
 			delete(hc.cachedValues, name)
 		}
 	}
@@ -533,6 +551,7 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 
 			lastErr = queryErr
 			hc.metricsFailed.Inc()
+			hc.prometheusConnErrors.Inc()
 			hc.logger.WithContextFields(context.Background(), SourcePrometheus).
 				Warnf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, queryErr)
 
@@ -703,6 +722,7 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	hc.healthScore.Set(finalScore)
 	hc.lastSuccessfulCalculation = time.Now()
 	hc.calculationTime.Observe(time.Since(startTime).Seconds())
+	hc.serviceUptime.Set(time.Since(hc.startTime).Seconds())
 
 	hc.logger.WithContextFields(ctx, SourceCalculator).Infof(
 		"Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",
