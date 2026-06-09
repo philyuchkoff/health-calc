@@ -260,14 +260,6 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 		return fmt.Errorf("failed to parse config: %v", err)
 	}
 
-	// Парсим timeout из конфига
-	timeout, err := time.ParseDuration(config.Prometheus.Timeout)
-	if err != nil {
-		hc.logger.WithContextFields(ctx, SourceConfig).Warnf(
-			"Invalid timeout format, using default 30s: %v", err)
-		timeout = 30 * time.Second
-	}
-
 	// Валидируем что сумма весов метрик = 1.0
 	totalWeight := 0.0
 	for _, metric := range config.Metrics {
@@ -280,7 +272,6 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 
 	hc.mutex.Lock()
 	hc.config = &config
-	hc.httpClient.Timeout = timeout
 
 	// Обновляем настройки circuit breaker
 	if config.CircuitBreaker.MaxFailures > 0 {
@@ -391,8 +382,13 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 	q.Add("query", query)
 	req.URL.RawQuery = q.Encode()
 
-	// Add context timeout to prevent hanging requests
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	timeout := 10 * time.Second
+	if hc.config != nil && hc.config.Prometheus.Timeout != "" {
+		if t, err := time.ParseDuration(hc.config.Prometheus.Timeout); err == nil {
+			timeout = t
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req = req.WithContext(ctx)
 
