@@ -8,6 +8,7 @@ import (
 func TestCacheValue(t *testing.T) {
 	hc := &HealthCalculator{
 		cachedValues: make(map[string]*CachedValue),
+		logger:       NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Test caching
@@ -45,6 +46,7 @@ func TestGetFallbackValue(t *testing.T) {
 			},
 		},
 		maxAgeDuration: 10 * time.Minute,
+		logger:         NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	metric := Metric{
@@ -93,6 +95,7 @@ func TestGetFallbackValue(t *testing.T) {
 func TestCleanupExpiredCache(t *testing.T) {
 	hc := &HealthCalculator{
 		cachedValues: make(map[string]*CachedValue),
+		logger:       NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Add some values
@@ -125,6 +128,7 @@ func TestCleanupExpiredCache(t *testing.T) {
 func TestParseGracefulDegConfig(t *testing.T) {
 	hc := &HealthCalculator{
 		maxAgeDuration: 10 * time.Minute,
+		logger:         NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Test valid config

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"os"
@@ -23,14 +22,14 @@ import (
 
 // Config structures - определяют структуру конфигурационного файла
 type Config struct {
-	UpdateInterval  string               `yaml:"update_interval"`
-	Metrics         []Metric             `yaml:"metrics"`
-	Alerting        Alerting             `yaml:"alerting"`
-	Prometheus      PrometheusConfig     `yaml:"prometheus"`
-	CircuitBreaker  CircuitBreakerConfig `yaml:"circuit_breaker"`
+	UpdateInterval string               `yaml:"update_interval"`
+	Metrics        []Metric             `yaml:"metrics"`
+	Alerting       Alerting             `yaml:"alerting"`
+	Prometheus     PrometheusConfig     `yaml:"prometheus"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
 	GracefulDeg    GracefulDegConfig    `yaml:"graceful_degradation"`
-	RateLimit       RateLimitConfig      `yaml:"rate_limit"`
-	Logging         LoggingConfig        `yaml:"logging"`
+	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
+	Logging        LoggingConfig        `yaml:"logging"`
 }
 
 type CircuitBreakerConfig struct {
@@ -103,17 +102,17 @@ type HealthCalculator struct {
 	circuitBreaker            *CircuitBreaker
 	circuitBreakerTripped     prometheus.Counter
 	// Graceful degradation fields
-	cachedValues              map[string]*CachedValue
-	degradedMode              prometheus.Gauge
-	fallbackUsed              prometheus.Counter
-	maxAgeDuration            time.Duration
-	isDegraded                bool // Track degraded state separately
+	cachedValues   map[string]*CachedValue
+	degradedMode   prometheus.Gauge
+	fallbackUsed   prometheus.Counter
+	maxAgeDuration time.Duration
+	isDegraded     bool // Track degraded state separately
 	// Rate limiting fields
-	rateLimiter               *RateLimiter
-	rateLimitExceeded         prometheus.Counter
-	activeClients             prometheus.Gauge
+	rateLimiter       *RateLimiter
+	rateLimitExceeded prometheus.Counter
+	activeClients     prometheus.Gauge
 	// Logging
-	logger                   *Logger
+	logger *Logger
 }
 
 // CachedValue хранит кэшированное значение метрики с метаданными
@@ -180,32 +179,32 @@ func NewHealthCalculator() *HealthCalculator {
 	cb := NewCircuitBreaker("prometheus", 3, 30*time.Second)
 
 	return &HealthCalculator{
-		healthScore:          healthScore,
-		metricValues:         make(map[string]float64),
-		metricsFetched:       metricsFetched,
-		metricsFailed:        metricsFailed,
-		calculationTime:      calculationTime,
+		healthScore:           healthScore,
+		metricValues:          make(map[string]float64),
+		metricsFetched:        metricsFetched,
+		metricsFailed:         metricsFailed,
+		calculationTime:       calculationTime,
 		circuitBreakerTripped: circuitBreakerTripped,
-			degradedMode:         degradedMode,
-			fallbackUsed:         fallbackUsed,
-			cachedValues:         make(map[string]*CachedValue),
-			maxAgeDuration:       10 * time.Minute, // по умолчанию
+		degradedMode:          degradedMode,
+		fallbackUsed:          fallbackUsed,
+		cachedValues:          make(map[string]*CachedValue),
+		maxAgeDuration:        10 * time.Minute, // по умолчанию
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
-	},
-	circuitBreaker: cb,
-	logger: func() *Logger {
-		logger := NewLogger(LoggingConfig{
-			Level: "info",
-			Format: "json",
-			Service: "health-calculator",
-		})
-		logger.Info("Health calculator service initialized")
-		return logger
-	}(),	rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
-	rateLimitExceeded: rateLimitExceeded,
-	activeClients: activeClients,
-}
+		},
+		circuitBreaker: cb,
+		logger: func() *Logger {
+			logger := NewLogger(LoggingConfig{
+				Level:   "info",
+				Format:  "json",
+				Service: "health-calculator",
+			})
+			logger.Info("Health calculator service initialized")
+			return logger
+		}(), rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
+		rateLimitExceeded: rateLimitExceeded,
+		activeClients:     activeClients,
+	}
 }
 
 // loadConfig загружает и парсит конфигурационный файл
@@ -235,8 +234,6 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 		return fmt.Errorf("failed to parse config: %v", err)
 	}
 
-	hc.config = &config
-
 	// Парсим timeout из конфига
 	timeout, err := time.ParseDuration(config.Prometheus.Timeout)
 	if err != nil {
@@ -244,53 +241,8 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 			"Invalid timeout format, using default 30s: %v", err)
 		timeout = 30 * time.Second
 	}
-	hc.httpClient.Timeout = timeout
 
-	// Обновляем настройки circuit breaker
-	if config.CircuitBreaker.MaxFailures > 0 {
-		resetTimeout, err := time.ParseDuration(config.CircuitBreaker.ResetTimeout)
-		if err != nil {
-			log.Printf("Invalid circuit breaker reset timeout, using default 30s: %v", err)
-			resetTimeout = 30 * time.Second
-		}
-
-		// Создаем новый circuit breaker с обновленными настройками
-		cb := NewCircuitBreaker("prometheus", config.CircuitBreaker.MaxFailures, resetTimeout)
-
-		// Устанавливаем callback для логирования изменений состояния
-		cb.SetStateChangeCallback(func(name string, from, to CircuitBreakerState) {
-			log.Printf("Circuit breaker '%s' changed state from %v to %v", name, from, to)
-			hc.circuitBreakerTripped.Inc()
-		})
-
-		hc.circuitBreaker = cb
-		log.Printf("Circuit breaker updated: max_failures=%d, reset_timeout=%s",
-			config.CircuitBreaker.MaxFailures, config.CircuitBreaker.ResetTimeout)
-	}
-
-		// Обновляем настройки логирования
-		if config.Logging.Service != "" {
-			hc.logger = NewLogger(config.Logging)
-			hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Info(
-				"Logging configuration updated",
-			)
-		}
-
-		// Обновляем настройки graceful degradation
-		if config.GracefulDeg.CacheTTL != "" {
-			hc.parseGracefulDegConfig(&config.GracefulDeg)
-		}
-
-		// Обновляем настройки rate limiting
-		hc.rateLimiter = NewRateLimiter(config.RateLimit)
-		if config.RateLimit.Enabled {
-			hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Infof(
-				"Rate limiting enabled with %d global rules and %d per-IP rules",
-				len(config.RateLimit.GlobalRate), len(config.RateLimit.PerIPRate),
-			)
-		}
-
-		// Валидируем что сумма весов метрик = 1.0
+	// Валидируем что сумма весов метрик = 1.0
 	totalWeight := 0.0
 	for _, metric := range config.Metrics {
 		totalWeight += metric.Weight
@@ -300,7 +252,63 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 		return fmt.Errorf("metric weights must sum to 1.0, got: %f", totalWeight)
 	}
 
-	log.Printf("Config loaded successfully: %d metrics, update interval: %s",
+	hc.mutex.Lock()
+	hc.config = &config
+	hc.httpClient.Timeout = timeout
+
+	// Обновляем настройки circuit breaker
+	if config.CircuitBreaker.MaxFailures > 0 {
+		resetTimeout, err := time.ParseDuration(config.CircuitBreaker.ResetTimeout)
+		if err != nil {
+			hc.logger.WithContextFields(ctx, SourceConfig).Warnf(
+				"Invalid circuit breaker reset timeout, using default 30s: %v", err)
+			resetTimeout = 30 * time.Second
+		}
+
+		cb := NewCircuitBreaker("prometheus", config.CircuitBreaker.MaxFailures, resetTimeout)
+		cb.SetStateChangeCallback(func(name string, from, to CircuitBreakerState) {
+			hc.logger.WithContextFields(context.Background(), SourceConfig).
+				Infof("Circuit breaker '%s' changed state from %v to %v", name, from, to)
+			if to == StateOpen {
+				hc.circuitBreakerTripped.Inc()
+			}
+		})
+		hc.circuitBreaker = cb
+	}
+
+	// Обновляем настройки логирования
+	if config.Logging.Service != "" {
+		hc.logger = NewLogger(config.Logging)
+	}
+
+	// Обновляем настройки graceful degradation
+	if config.GracefulDeg.CacheTTL != "" {
+		hc.parseGracefulDegConfig(&config.GracefulDeg)
+	}
+
+	// Обновляем настройки rate limiting
+	hc.rateLimiter = NewRateLimiter(config.RateLimit)
+	hc.mutex.Unlock()
+
+	if config.CircuitBreaker.MaxFailures > 0 {
+		hc.logger.WithContextFields(ctx, SourceConfig).Infof(
+			"Circuit breaker updated: max_failures=%d, reset_timeout=%s",
+			config.CircuitBreaker.MaxFailures, config.CircuitBreaker.ResetTimeout)
+	}
+	if config.Logging.Service != "" {
+		hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Info(
+			"Logging configuration updated",
+		)
+	}
+	if config.RateLimit.Enabled {
+		hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Infof(
+			"Rate limiting enabled with %d global rules and %d per-IP rules",
+			len(config.RateLimit.GlobalRate), len(config.RateLimit.PerIPRate),
+		)
+	}
+
+	hc.logger.WithContextFields(ctx, SourceConfig).Infof(
+		"Config loaded successfully: %d metrics, update interval: %s",
 		len(config.Metrics), config.UpdateInterval)
 	return nil
 }
@@ -309,7 +317,8 @@ func (hc *HealthCalculator) loadConfig(configPath string) error {
 func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 	if config.CacheTTL != "" {
 		if _, err := time.ParseDuration(config.CacheTTL); err != nil {
-			log.Printf("Invalid cache TTL in config, using default 5m: %v", err)
+			hc.logger.WithContextFields(context.Background(), SourceConfig).
+				Warnf("Invalid cache TTL in config, using default 5m: %v", err)
 			config.CacheTTL = "5m"
 		}
 	}
@@ -317,13 +326,13 @@ func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 	if config.MaxAge != "" {
 		maxAge, err := time.ParseDuration(config.MaxAge)
 		if err != nil {
-			log.Printf("Invalid max age in config, using default 10m: %v", err)
+			hc.logger.WithContextFields(context.Background(), SourceConfig).
+				Warnf("Invalid max age in config, using default 10m: %v", err)
 			maxAge = 10 * time.Minute
 		}
 		hc.maxAgeDuration = maxAge
 	}
 
-	// Валидация fallback стратегии
 	validStrategies := map[string]bool{
 		FallbackStrategyZero:    true,
 		FallbackStrategyAverage: true,
@@ -332,13 +341,15 @@ func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 	}
 
 	if !validStrategies[config.FallbackStrategy] {
-		log.Printf("Invalid fallback strategy '%s', using 'neutral'", config.FallbackStrategy)
+		hc.logger.WithContextFields(context.Background(), SourceConfig).
+			Warnf("Invalid fallback strategy '%s', using 'neutral'", config.FallbackStrategy)
 		config.FallbackStrategy = FallbackStrategyNeutral
 	} else if config.FallbackStrategy == "" {
 		config.FallbackStrategy = FallbackStrategyNeutral
 	}
 
-	log.Printf("Graceful degradation configured: cache=%v, ttl=%s, maxAge=%s, strategy=%s",
+	hc.logger.WithContextFields(context.Background(), SourceConfig).Infof(
+		"Graceful degradation configured: cache=%v, ttl=%s, maxAge=%s, strategy=%s",
 		config.EnableCache, config.CacheTTL, config.MaxAge, config.FallbackStrategy)
 }
 
@@ -353,6 +364,11 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 	q := req.URL.Query()
 	q.Add("query", query)
 	req.URL.RawQuery = q.Encode()
+
+	// Add context timeout to prevent hanging requests
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
 
 	resp, err := hc.httpClient.Do(req)
 	if err != nil {
@@ -431,39 +447,45 @@ func (hc *HealthCalculator) getFallbackValue(metricName string, metric Metric) f
 	hc.mutex.RLock()
 	defer hc.mutex.RUnlock()
 
-	// Защита от nil в тестах
 	if hc.fallbackUsed != nil {
 		hc.fallbackUsed.Inc()
 	}
 
+	logger := hc.logger
+	if logger == nil {
+		logger = NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "health-calculator"})
+	}
+
 	switch hc.config.GracefulDeg.FallbackStrategy {
 	case FallbackStrategyZero:
-		log.Printf("Using zero fallback for metric %s", metricName)
+		logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Using zero fallback for metric %s", metricName)
 		return 0
 	case FallbackStrategyNeutral:
-		log.Printf("Using neutral fallback (0.5) for metric %s", metricName)
+		logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Using neutral fallback (0.5) for metric %s", metricName)
 		return 0.5
 	case FallbackStrategyLast:
 		if cachedValue, exists := hc.getCachedValue(metricName); exists {
-			// getCachedValue уже проверил TTL
-			log.Printf("Using last known value %.4f for metric %s",
-				cachedValue, metricName)
+			logger.WithContextFields(context.Background(), SourceCalculator).
+				Warnf("Using last known value %.4f for metric %s", cachedValue, metricName)
 			return cachedValue
 		}
-		log.Printf("No valid cached value for metric %s, using neutral fallback", metricName)
+		logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("No valid cached value for metric %s, using neutral fallback", metricName)
 		return 0.5
 	case FallbackStrategyAverage:
-		// Возвращаем среднюю точку диапазона
 		avg := (metric.MinValue + metric.MaxValue) / 2
-		log.Printf("Using average fallback %.4f for metric %s", avg, metricName)
-		// Нормализуем к диапазону 0-1
+		logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Using average fallback %.4f for metric %s", avg, metricName)
 		rangeSize := metric.MaxValue - metric.MinValue
 		if rangeSize == 0 {
 			return 1.0
 		}
 		return (avg - metric.MinValue) / rangeSize
 	default:
-		log.Printf("Unknown fallback strategy, using neutral for metric %s", metricName)
+		logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Unknown fallback strategy, using neutral for metric %s", metricName)
 		return 0.5
 	}
 }
@@ -502,18 +524,17 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 
 			lastErr = queryErr
 			hc.metricsFailed.Inc()
-			log.Printf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, queryErr)
+			hc.logger.WithContextFields(context.Background(), SourcePrometheus).
+				Warnf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, queryErr)
 
-			// Exponential backoff: 1s, 2s, 3s
 			time.Sleep(time.Duration(i+1) * time.Second)
 		}
 
 		err = lastErr
 
-		// Все ретраи провалились
 		hc.prometheusDownCount++
 		if hc.config != nil && hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
-			hc.sendAlert(context.Background(), fmt.Sprintf("🚨 Prometheus unavailable after %d attempts. Last error: %v",
+			hc.sendAlert(context.Background(), fmt.Sprintf("Prometheus unavailable after %d attempts. Last error: %v",
 				hc.prometheusDownCount, lastErr))
 		}
 
@@ -521,9 +542,9 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 	})
 
 	if cbErr == ErrCircuitBreakerOpen {
-		// Circuit breaker открыт - возвращаем дефолтное значение
-		log.Printf("Circuit breaker is open, using fallback value for metric %s", metricName)
-		return 0.5, nil // Возвращаем нейтральное значение 0.5
+		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Circuit breaker is open, using fallback value for metric %s", metricName)
+		return 0.5, nil
 	}
 
 	if err != nil {
@@ -570,7 +591,7 @@ func (hc *HealthCalculator) sendAlert(ctx context.Context, message string) {
 func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64 {
 	// Ограничиваем значение минимальным и максимальным диапазоном
 	if value < metric.MinValue {
-		return metric.MinValue
+		return 0.0
 	}
 	if value > metric.MaxValue {
 		return metric.MaxValue
@@ -602,12 +623,12 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	degradedMetrics := 0
 	var cacheTTL time.Duration
 
-	// Определяем TTL кэша из конфига
 	if hc.config != nil && hc.config.GracefulDeg.EnableCache {
 		var err error
 		cacheTTL, err = time.ParseDuration(hc.config.GracefulDeg.CacheTTL)
 		if err != nil {
-			log.Printf("Invalid cache TTL, using default 5m: %v", err)
+			hc.logger.WithContextFields(context.Background(), SourceCalculator).
+				Warnf("Invalid cache TTL, using default 5m: %v", err)
 			cacheTTL = 5 * time.Minute
 		}
 	}
@@ -618,21 +639,20 @@ func (hc *HealthCalculator) calculateHealthScore() {
 		var err error
 		var usedFallback bool
 
-		// Пытаемся получить значение из кэша
 		if cachedValue, exists := hc.getCachedValue(metric.Name); exists && hc.config.GracefulDeg.EnableCache {
 			value = cachedValue
-			log.Printf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
+			hc.logger.WithContextFields(ctx, SourceCalculator).
+				Debugf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
 		} else {
-			// Запрашиваем свежее значение
 			value, err = hc.queryPrometheusWithRetry(metric.Query, metric.Name)
 
 			if err != nil {
-				log.Printf("Failed to get metric %s, using fallback: %v", metric.Name, err)
+				hc.logger.WithContextFields(ctx, SourceCalculator).
+					Warnf("Failed to get metric %s, using fallback: %v", metric.Name, err)
 				value = hc.getFallbackValue(metric.Name, metric)
 				usedFallback = true
 				degradedMetrics++
 			} else {
-				// Кэшируем успешное значение
 				if hc.config.GracefulDeg.EnableCache {
 					hc.cacheValue(metric.Name, value, cacheTTL)
 				}
@@ -646,15 +666,14 @@ func (hc *HealthCalculator) calculateHealthScore() {
 		validMetrics++
 
 		if usedFallback {
-			log.Printf("Metric %s used fallback value: %.4f (normalized: %.4f)",
-				metric.Name, value, normalizedValue)
+			hc.logger.WithContextFields(ctx, SourceCalculator).
+				Infof("Metric %s used fallback value: %.4f (normalized: %.4f)",
+					metric.Name, value, normalizedValue)
 		}
 	}
 
-	// Calculate degradation factor
 	degradationFactor := 1.0
 	if degradedMetrics > 0 {
-		// Чем больше метрик используют fallback, тем больше снижение
 		degradationFactor = 1.0 - (float64(degradedMetrics) / float64(len(hc.config.Metrics)) * 0.3)
 		hc.logger.WithModule(ctx, SourceCalculator, "score_calc").Infof(
 			"Degradation: %d/%d metrics using fallback, factor: %.2f",
@@ -662,10 +681,8 @@ func (hc *HealthCalculator) calculateHealthScore() {
 		)
 	}
 
-	// Применяем фактор деградации
 	finalScore := totalScore * degradationFactor
 
-	// Обновляем метрику degraded mode и флаг
 	if degradedMetrics > 0 {
 		hc.degradedMode.Set(1)
 		hc.isDegraded = true
@@ -678,7 +695,8 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	hc.lastSuccessfulCalculation = time.Now()
 	hc.calculationTime.Observe(time.Since(startTime).Seconds())
 
-	log.Printf("Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",
+	hc.logger.WithContextFields(ctx, SourceCalculator).Infof(
+		"Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",
 		finalScore, validMetrics, degradedMetrics, degradationFactor, time.Since(startTime))
 }
 
@@ -713,41 +731,39 @@ func (hc *HealthCalculator) wrapWithRateLimit(handler http.HandlerFunc) http.Han
 		rateLimitExceeded: hc.rateLimitExceeded,
 		activeClients:     hc.activeClients,
 	}
-	return RateLimitMiddleware(hc.rateLimiter, metrics, handler)
+	return RateLimitMiddleware(hc.rateLimiter, metrics, hc.logger, handler)
 }
 
 // healthHandler - HTTP handler для health checks
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := ContextWithRequestID(context.Background(), GenerateRequestID())
-
 	hc.mutex.RLock()
 	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
+	lastCalcTime := hc.lastSuccessfulCalculation
 	isDegraded := hc.isDegraded
-	circuitOpen := hc.circuitBreaker.State() == StateOpen
+	cbState := hc.circuitBreaker.State()
+	circuitOpen := cbState == StateOpen
 	hc.mutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 
 	status := "healthy"
 	statusCode := http.StatusOK
+	stateName := "unknown"
+	switch cbState {
+	case StateClosed:
+		stateName = "closed"
+	case StateOpen:
+		stateName = "open"
+	case StateHalfOpen:
+		stateName = "half-open"
+	}
 	response := map[string]interface{}{
 		"status":                      status,
-		"last_successful_calculation": hc.lastSuccessfulCalculation.Format(time.RFC3339),
+		"last_successful_calculation": lastCalcTime.Format(time.RFC3339),
 		"age":                         lastUpdate.String(),
 		"degraded":                    isDegraded,
 		"circuit_breaker": map[string]interface{}{
-			"state": func() string {
-				switch hc.circuitBreaker.State() {
-				case StateClosed:
-					return "closed"
-				case StateOpen:
-					return "open"
-				case StateHalfOpen:
-					return "half-open"
-				default:
-					return "unknown"
-				}
-			}(),
+			"state": stateName,
 		},
 	}
 
@@ -784,25 +800,25 @@ func (hc *HealthCalculator) Start(ctx context.Context) error {
 	// Запускаем очистку rate limiter buckets
 	go hc.cleanupRateLimitBuckets(ctx)
 
-	// Парсим интервал обновления из конфига
 	interval, err := time.ParseDuration(hc.config.UpdateInterval)
 	if err != nil {
-		log.Printf("Invalid update interval, using default 5m: %v", err)
+		hc.logger.WithContextFields(ctx, SourceCalculator).
+			Warnf("Invalid update interval, using default 5m: %v", err)
 		interval = 5 * time.Minute
 	}
 
-	log.Printf("Starting health calculation loop with interval: %v", interval)
+	hc.logger.WithContextFields(ctx, SourceCalculator).
+		Infof("Starting health calculation loop with interval: %v", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Выполняем первый расчет сразу при старте
 	hc.calculateHealthScore()
 
-	// Основной цикл
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Shutting down health calculator gracefully")
+			hc.logger.WithContextFields(ctx, SourceCalculator).
+				Info("Shutting down health calculator gracefully")
 			return nil
 		case <-ticker.C:
 			hc.calculateHealthScore()
@@ -836,7 +852,8 @@ func (hc *HealthCalculator) watchConfig(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := hc.loadConfig("health-config.yaml"); err != nil {
-				log.Printf("Failed to reload config: %v", err)
+				hc.logger.WithContextFields(context.Background(), SourceConfig).
+					Errorf("Failed to reload config: %v", err)
 			}
 		}
 	}
@@ -855,10 +872,6 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Health Calculator Service"))
 	}))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Health Calculator Service"))
-	})
 
 	server := &http.Server{
 		Addr:         ":8080",
@@ -868,45 +881,39 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Запускаем HTTP сервер в горутине
 	go func() {
-		log.Printf("Starting HTTP server on %s", server.Addr)
+		calculator.logger.Infof("Starting HTTP server on %s", server.Addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			calculator.logger.Fatalf("HTTP server error: %v", err)
 		}
 	}()
 
-	// Настраиваем graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Обработка сигналов OS для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Запускаем основной сервис в горутине
 	serviceErr := make(chan error, 1)
 	go func() {
 		serviceErr <- calculator.Start(ctx)
 	}()
 
-	// Ожидаем сигнал завершения или ошибку сервиса
 	select {
 	case sig := <-sigChan:
-		log.Printf("Received signal: %v, shutting down...", sig)
+		calculator.logger.Infof("Received signal: %v, shutting down...", sig)
 		cancel()
 	case err := <-serviceErr:
-		log.Printf("Service error: %v, shutting down...", err)
+		calculator.logger.Infof("Service error: %v, shutting down...", err)
 		cancel()
 	}
 
-	// Graceful shutdown HTTP сервера
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
+		calculator.logger.Errorf("HTTP server shutdown error: %v", err)
 	}
 
-	log.Println("Health Calculator Service stopped gracefully")
+	calculator.logger.Info("Health Calculator Service stopped gracefully")
 }

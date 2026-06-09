@@ -176,7 +176,7 @@ curl http://localhost:8080/circuit-breaker
 - [x] метрики для мониторинга самого сервиса
 - [x] хелсчек с бизнес-логикой
 - [x] circuit breaker
-- [х] structured logging
+- [x] structured logging
 - [x] graceful degradation
 - [x] rate limiting
 - [ ] улучшить health checks

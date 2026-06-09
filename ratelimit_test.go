@@ -107,26 +107,47 @@ func TestRateLimiter(t *testing.T) {
 	req2.RemoteAddr = "192.168.1.2:12345"
 
 	// First request from each IP should be allowed
-	if !rl.IsAllowed(req1, "/test") {
+	allowed, limit, remaining := rl.IsAllowed(req1, "/test")
+	if !allowed {
 		t.Error("First request from IP1 should be allowed")
 	}
-	if !rl.IsAllowed(req2, "/test") {
+	if limit != 2 {
+		t.Errorf("Expected limit 2, got %d", limit)
+	}
+	if remaining != 1 {
+		t.Errorf("Expected 1 remaining, got %d", remaining)
+	}
+	allowed, _, _ = rl.IsAllowed(req2, "/test")
+	if !allowed {
 		t.Error("First request from IP2 should be allowed")
 	}
 
 	// Second requests should be allowed
-	if !rl.IsAllowed(req1, "/test") {
+	allowed, _, remaining = rl.IsAllowed(req1, "/test")
+	if !allowed {
 		t.Error("Second request from IP1 should be allowed")
 	}
-	if !rl.IsAllowed(req2, "/test") {
+	if remaining != 0 {
+		t.Errorf("Expected 0 remaining, got %d", remaining)
+	}
+	allowed, _, _ = rl.IsAllowed(req2, "/test")
+	if !allowed {
 		t.Error("Second request from IP2 should be allowed")
 	}
 
 	// Third requests should be denied
-	if rl.IsAllowed(req1, "/test") {
+	allowed, limit, remaining = rl.IsAllowed(req1, "/test")
+	if allowed {
 		t.Error("Third request from IP1 should be denied")
 	}
-	if rl.IsAllowed(req2, "/test") {
+	if limit != 2 {
+		t.Errorf("Expected limit 2, got %d", limit)
+	}
+	if remaining != 0 {
+		t.Errorf("Expected 0 remaining, got %d", remaining)
+	}
+	allowed, _, _ = rl.IsAllowed(req2, "/test")
+	if allowed {
 		t.Error("Third request from IP2 should be denied")
 	}
 }
@@ -141,13 +162,15 @@ func TestBucket(t *testing.T) {
 
 	// Use all tokens
 	for i := 0; i < 5; i++ {
-		if !bucket.AllowNext() {
+		allowed, _ := bucket.AllowNext()
+		if !allowed {
 			t.Errorf("Request %d should be allowed", i+1)
 		}
 	}
 
 	// Next should be denied
-	if bucket.AllowNext() {
+	allowed, _ := bucket.AllowNext()
+	if allowed {
 		t.Error("Request should be denied when no tokens")
 	}
 
@@ -155,7 +178,8 @@ func TestBucket(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	// Should be allowed again
-	if !bucket.AllowNext() {
+	allowed, _ = bucket.AllowNext()
+	if !allowed {
 		t.Error("Request should be allowed after refill")
 	}
 }
@@ -176,7 +200,8 @@ func TestRateLimiterWhitelist(t *testing.T) {
 	req.RemoteAddr = "192.168.1.100:12345"
 
 	for i := 0; i < 10; i++ {
-		if !rl.IsAllowed(req, "/test") {
+		allowed, _, _ := rl.IsAllowed(req, "/test")
+		if !allowed {
 			t.Errorf("Whitelisted IP request %d should always be allowed", i+1)
 		}
 	}
@@ -186,12 +211,14 @@ func TestRateLimiterWhitelist(t *testing.T) {
 	req2.RemoteAddr = "192.168.1.200:12345"
 
 	// First should be allowed
-	if !rl.IsAllowed(req2, "/test") {
+	allowed, _, _ := rl.IsAllowed(req2, "/test")
+	if !allowed {
 		t.Error("First request from non-whitelisted IP should be allowed")
 	}
 
 	// Second should be denied
-	if rl.IsAllowed(req2, "/test") {
+	allowed, _, _ = rl.IsAllowed(req2, "/test")
+	if allowed {
 		t.Error("Second request from non-whitelisted IP should be denied")
 	}
 }
@@ -214,7 +241,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	}
 
 	// Create middleware
-	middleware := RateLimitMiddleware(rl, nil, next)
+	middleware := RateLimitMiddleware(rl, nil, nil, next)
 
 	// First request
 	w1 := httptest.NewRecorder()
