@@ -1,5 +1,10 @@
 # Graceful Degradation Implementation
 
+> Подробнее про конфигурацию: [Конфигурация → graceful_degradation](03-configuration.md#graceful_degradation)
+> Назад к навигации: [index](index.md)
+
+
+
 Graceful degradation позволяет сервису продолжать работу даже при частичной недоступности метрик, используя различные стратегии fallback.
 
 ## Как это работает

@@ -1,5 +1,10 @@
 # Circuit Breaker Implementation
 
+> Подробнее про конфигурацию: [Конфигурация → circuit_breaker](03-configuration.md#circuit_breaker)
+> Назад к навигации: [index](index.md)
+
+
+
 Circuit breaker паттерн внедрен для защиты сервиса от каскадных сбоев при недоступности Prometheus. Он предотвращает бесконечные попытки подключения к неработающему сервису.
 
 ## Как это работает

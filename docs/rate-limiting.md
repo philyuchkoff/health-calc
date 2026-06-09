@@ -1,5 +1,10 @@
 # Rate Limiting Implementation
 
+> Подробнее про конфигурацию: [Конфигурация → rate_limit](03-configuration.md#rate_limit)
+> Назад к навигации: [index](index.md)
+
+
+
 ## Обзор
 
 Rate limiting реализован для защиты сервиса от перегрузки и злоупотреблений. Использует leaky bucket алгоритм с настраиваемыми лимитами.
