@@ -24,3 +24,4 @@ go.work.sum
 PLAN.md
 SRE-*.md
 .DS_Store
+health-calculator
