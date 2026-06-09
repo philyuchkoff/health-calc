@@ -1,4 +1,4 @@
-> [English version](README.md)
+> [English version](README.md) · [Документация](https://philyuchkoff.github.io/health-calc/)
 
 # Health score calculator
 

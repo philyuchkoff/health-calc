@@ -1,4 +1,4 @@
-> [Русская версия](README-RU.md)
+> [Русская версия](README-RU.md) · [Documentation](https://philyuchkoff.github.io/health-calc/)
 
 # Health score calculator
 
