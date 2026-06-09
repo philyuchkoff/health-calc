@@ -1,38 +1,40 @@
-# Health Calculator — документация
+> [Русская версия](ru/index.md)
 
-**Health Calculator** — это сервис на Go, который вычисляет агрегированный показатель «здоровья» платформы (`platform_health_score`) на основе метрик из Prometheus. Используется для SLO-мониторинга, синтетического алертинга и визуализации в Grafana.
+# Health Calculator — Documentation
 
----
-
-## Навигация
-
-### Для начинающих
-
-| Раздел | О чём |
-|--------|-------|
-| [Быстрый старт](01-quickstart.md) | Запустить сервис за 5 минут |
-| [Установка](02-installation.md) | Скачать, собрать, установить (локально / Docker) |
-| [Конфигурация](03-configuration.md) | Полный разбор health-config.yaml |
-
-### Для ежедневной работы
-
-| Раздел | О чём |
-|--------|-------|
-| [Запуск и API](04-usage.md) | Запуск, endpoints, примеры curl |
-| [Production-эксплуатация](05-operations.md) | Мониторинг, алерты, K8s, типовые сценарии |
-| [Решение проблем](06-troubleshooting.md) | FAQ, частые ошибки, диагностика |
-
-### Глубокое погружение в механизмы
-
-| Раздел | О чём |
-|--------|-------|
-| [Circuit Breaker](circuit-breaker.md) | Защита от каскадных сбоев |
-| [Graceful Degradation](graceful-degradation.md) | Работа при недоступности метрик |
-| [Rate Limiting](rate-limiting.md) | Защита от перегрузок |
+**Health Calculator** is a Go service that computes an aggregated platform health score (`platform_health_score`) based on Prometheus metrics. It is used for SLO monitoring, synthetic alerting, and visualization in Grafana.
 
 ---
 
-## Быстрая карта
+## Navigation
+
+### For beginners
+
+| Section | Description |
+|---------|-------------|
+| [Quick Start](01-quickstart.md) | Run the service in 5 minutes |
+| [Installation](02-installation.md) | Download, build, install (local / Docker) |
+| [Configuration](03-configuration.md) | Full breakdown of health-config.yaml |
+
+### For day-to-day operations
+
+| Section | Description |
+|---------|-------------|
+| [Running and API](04-usage.md) | Startup, endpoints, curl examples |
+| [Production Operations](05-operations.md) | Monitoring, alerts, K8s, common scenarios |
+| [Troubleshooting](06-troubleshooting.md) | FAQ, common errors, diagnostics |
+
+### Deep dive into internals
+
+| Section | Description |
+|---------|-------------|
+| [Circuit Breaker](circuit-breaker.md) | Protection against cascading failures |
+| [Graceful Degradation](graceful-degradation.md) | Operating when metrics are unavailable |
+| [Rate Limiting](rate-limiting.md) | Overload protection |
+
+---
+
+## Quick map
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -49,13 +51,13 @@
 └──────────────────────────────────────────────────┘
 ```
 
-## Требования
+## Requirements
 
-- Go 1.23+ (для сборки из исходников)
-- Docker (опционально, для контейнеризации)
-- Prometheus (источник метрик)
-- Telegram bot token (опционально, для алертов)
+- Go 1.23+ (for building from source)
+- Docker (optional, for containerization)
+- Prometheus (metric source)
+- Telegram bot token (optional, for alerts)
 
 ---
 
-К началу: [index](index.md)
+Back to top: [index](index.md)

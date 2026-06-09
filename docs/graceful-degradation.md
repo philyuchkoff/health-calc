@@ -1,67 +1,69 @@
+> [Русская версия](ru/graceful-degradation.md)
+
 # Graceful Degradation Implementation
 
-> Подробнее про конфигурацию: [Конфигурация → graceful_degradation](03-configuration.md#graceful_degradation)
-> Назад к навигации: [index](index.md)
+> More about configuration: [Configuration → graceful_degradation](03-configuration.md#graceful_degradation)
+> Back to navigation: [index](index.md)
 
 
 
-Graceful degradation позволяет сервису продолжать работу даже при частичной недоступности метрик, используя различные стратегии fallback.
+Graceful degradation allows the service to continue operating even when some metrics are unavailable, using various fallback strategies.
 
-## Как это работает
+## How It Works
 
-### 1. Кэширование значений
+### 1. Value Caching
 
-- **TTL-based кэш**: Значения метрик кэшируются на время `cache_ttl`
-- **Автоматическая очистка**: Просроченные значения удаляются при каждом расчете
-- **Максимальный возраст**: Значения старше `max_age` не используются в fallback
+- **TTL-based cache**: Metric values are cached for the duration of `cache_ttl`
+- **Automatic cleanup**: Expired values are removed on each calculation
+- **Maximum age**: Values older than `max_age` are not used in fallback
 
-### 2. Fallback стратегии
+### 2. Fallback Strategies
 
-При недоступности метрики используется одна из стратегий:
+When a metric is unavailable, one of the following strategies is used:
 
 #### `zero`
-- Возвращает 0 (минимальное значение)
-- Подходит для критичных метрик, где 0 означает проблему
+- Returns 0 (minimum value)
+- Suitable for critical metrics where 0 indicates a problem
 
 #### `neutral`
-- Возвращает 0.5 (среднее значение)
-- Нейтральный вариант, не сильно влияет на общий score
+- Returns 0.5 (average value)
+- A neutral option that does not heavily affect the overall score
 
 #### `average`
-- Возвращает среднюю точку диапазона метрики
-- Пример: для диапазона 0-100 вернет 50
+- Returns the midpoint of the metric's range
+- Example: for a range of 0-100 returns 50
 
 #### `last_known`
-- Использует последнее кэшированное значение
-- Если кэш пуст или просрочен - использует `neutral`
+- Uses the last cached value
+- If the cache is empty or expired, falls back to `neutral`
 
-### 3. Фактор деградации
+### 3. Degradation Factor
 
-Когда метрики используют fallback:
-- Расчитывается фактор деградации: `1 - (degraded_metrics / total_metrics * 0.3)`
-- Финальный score умножается на этот фактор
-- Максимум 30% снижение при всех метриках в fallback
+When metrics use fallback:
+- A degradation factor is calculated: `1 - (degraded_metrics / total_metrics * 0.3)`
+- The final score is multiplied by this factor
+- Maximum 30% reduction when all metrics are in fallback
 
-## Конфигурация
+## Configuration
 
 ```yaml
 graceful_degradation:
-  enable_cache: true          # Включить кэширование
-  cache_ttl: "5m"            # TTL кэша значений
-  max_age: "10m"             # Максимальный возраст для last_known
+  enable_cache: true          # Enable caching
+  cache_ttl: "5m"            # Value cache TTL
+  max_age: "10m"             # Maximum age for last_known
   fallback_strategy: "neutral" # zero|average|last_known|neutral
 ```
 
-## Мониторинг
+## Monitoring
 
-### Метрики Prometheus
+### Prometheus Metrics
 
-- `health_calculator_degraded_mode` - 1 если сервис в degraded режиме
-- `health_calculator_fallback_used_total` - сколько раз использовались fallback
+- `health_calculator_degraded_mode` - 1 if the service is in degraded mode
+- `health_calculator_fallback_used_total` - number of times fallback was used
 
 ### Health Endpoint
 
-`GET /health` возвращает дополнительную информацию:
+`GET /health` returns additional information:
 ```json
 {
   "status": "degraded",
@@ -73,41 +75,41 @@ graceful_degradation:
 }
 ```
 
-## Примеры работы
+## Usage Examples
 
-### Сценарий 1: Временная недоступность Prometheus
-1. Circuit breaker открывается после 3 неудачных запросов
-2. Метрики начинают использовать fallback значения
-3. Сервис продолжает работать с degraded score
-4. При восстановлении Prometheus сервис переключается на реальные данные
+### Scenario 1: Temporary Prometheus Unavailability
+1. Circuit breaker opens after 3 failed requests
+2. Metrics start using fallback values
+3. The service continues operating with a degraded score
+4. When Prometheus recovers, the service switches back to real data
 
-### Сценарий 2: Частичная недоступность метрик
-1. 2 из 4 метрик недоступны
-2. Фактор деградации: `1 - (2/4 * 0.3) = 0.85`
-3. Score умножается на 0.85
-4. Сервис отмечается как degraded, но продолжает работу
+### Scenario 2: Partial Metric Unavailability
+1. 2 out of 4 metrics are unavailable
+2. Degradation factor: `1 - (2/4 * 0.3) = 0.85`
+3. Score is multiplied by 0.85
+4. The service is marked as degraded but continues operating
 
-### Сценарий 3: Использование кэша
-1. Новые запросы к Prometheus успешны
-2. Значения кэшируются на 5 минут
-3. При следующих запросах используются кэшированные значения
-4. Экономятся запросы к Prometheus
+### Scenario 3: Cache Usage
+1. New requests to Prometheus succeed
+2. Values are cached for 5 minutes
+3. Subsequent requests use cached values
+4. Fewer requests are made to Prometheus
 
-## Преимущества
+## Advantages
 
-1. **Отказоустойчивость**: Сервис продолжает работать при сбоях
-2. **Плавное снижение**: Score снижается пропорционально проблемам
-3. **Гибкость**: Различные стратегии под разные типы метрик
-4. **Прозрачность**: Явные индикаторы degraded состояния
-5. **Эффективность**: Кэш снижает нагрузку на Prometheus
+1. **Fault tolerance**: The service continues operating during failures
+2. **Graceful degradation**: Score decreases proportionally to issues
+3. **Flexibility**: Different strategies for different metric types
+4. **Transparency**: Clear indicators of degraded state
+5. **Efficiency**: Cache reduces load on Prometheus
 
-## Настройка для production
+## Production Configuration
 
-Рекомендуемые настройки:
-- `cache_ttl: "10m"` - дольше кэшировать для стабильности
-- `max_age: "30m"` - дольше использовать last_known значения
-- `fallback_strategy: "last_known"` - максимально использовать исторические данные
+Recommended settings:
+- `cache_ttl: "10m"` — longer caching for stability
+- `max_age: "30m"` — use last_known values for longer
+- `fallback_strategy: "last_known"` — maximize use of historical data
 
-Для критичных систем:
-- `fallback_strategy: "zero"` - явное indication проблем
-- Меньшие TTL для быстрого реагирования на изменения
+For critical systems:
+- `fallback_strategy: "zero"` — clear indication of problems
+- Smaller TTLs for faster response to changes

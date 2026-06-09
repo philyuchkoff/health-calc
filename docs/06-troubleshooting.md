@@ -1,35 +1,37 @@
-# Решение проблем
+> [Русская версия](ru/06-troubleshooting.md)
 
-## Содержание
+# Troubleshooting
 
-- [Сервис не стартует](#сервис-не-стартует)
-- [Health score не обновляется](#health-score-не-обновляется)
-- [Rate limit срабатывает слишком часто](#rate-limit-срабатывает-слишком-часто)
-- [Circuit breaker постоянно открыт](#circuit-breaker-постоянно-открыт)
-- [Алерты не приходят в Telegram](#алерты-не-приходят-в-telegram)
-- [Метрики не появляются в Prometheus](#метрики-не-появляются-в-prometheus)
+## Table of Contents
+
+- [Service won't start](#service-wont-start)
+- [Health score not updating](#health-score-not-updating)
+- [Rate limit triggers too often](#rate-limit-triggers-too-often)
+- [Circuit breaker constantly open](#circuit-breaker-constantly-open)
+- [Alerts not arriving in Telegram](#alerts-not-arriving-in-telegram)
+- [Metrics not showing up in Prometheus](#metrics-not-showing-up-in-prometheus)
 - [Kubernetes probe fails](#kubernetes-probe-fails)
-- [Паника в сервисе](#паника-в-сервисе)
-- [Config hot-reload не работает](#config-hot-reload-не-работает)
-- [Диагностические команды](#диагностические-команды)
+- [Panic in the service](#panic-in-the-service)
+- [Config hot-reload not working](#config-hot-reload-not-working)
+- [Diagnostic commands](#diagnostic-commands)
 
 ---
 
-## Сервис не стартует
+## Service won't start
 
-**Симптом:** `go run .` или `./health-calculator` завершается с ошибкой.
+**Symptom:** `go run .` or `./health-calculator` exits with an error.
 
-**Шаг 1. Проверьте, что порт не занят**
+**Step 1. Check that the port is not in use**
 
 ```bash
 lsof -i :8080
-# или
+# or
 ss -tlnp | grep 8080
 ```
 
-Если порт занят — либо остановите процесс, либо измените порт в коде (`server.Addr` в `calc.go`).
+If the port is in use — either stop the process or change the port in the code (`server.Addr` in `calc.go`).
 
-**Шаг 2. Проверьте health-config.yaml**
+**Step 2. Check health-config.yaml**
 
 ```bash
 ./health-calculator
@@ -37,96 +39,96 @@ ss -tlnp | grep 8080
 # Failed to load initial config: failed to parse config: ...
 ```
 
-Типичные ошибки в конфиге:
+Typical config errors:
 
-| Ошибка | Причина |
-|--------|---------|
-| `failed to read config` | Файл `health-config.yaml` не найден |
-| `failed to parse config` | Ошибка YAML-синтаксиса |
-| `metric weights must sum to 1.0` | Сумма весов метрик != 1.0 |
-| `invalid cache TTL` | Формат времени в `cache_ttl` неверный |
+| Error | Cause |
+|-------|-------|
+| `failed to read config` | File `health-config.yaml` not found |
+| `failed to parse config` | YAML syntax error |
+| `metric weights must sum to 1.0` | Sum of metric weights != 1.0 |
+| `invalid cache TTL` | Time format in `cache_ttl` is invalid |
 
-**Шаг 3. Проверьте Go-зависимости**
+**Step 3. Check Go dependencies**
 
 ```bash
 go mod tidy
 go run .
 ```
 
-## Health score не обновляется
+## Health score not updating
 
-**Симптом:** метрика `platform_health_score` не меняется или отсутствует.
+**Symptom:** metric `platform_health_score` does not change or is absent.
 
-**Шаг 1. Проверьте логи**
+**Step 1. Check logs**
 
 ```bash
-# Поднять уровень логирования в конфиге
+# Raise log level in config
 logging:
   level: "debug"
 
-# В логах должно быть:
+# Logs should show:
 # "Health score updated: 0.8943 (from 4 metrics, 0 degraded...)"
 ```
 
-**Шаг 2. Проверьте доступность Prometheus**
+**Step 2. Check Prometheus availability**
 
 ```bash
-# Прямой запрос к Prometheus API
+# Direct request to Prometheus API
 curl "http://prometheus:9090/api/v1/query?query=up"
 
-# Если не отвечает — проблема в сети или Prometheus
-# Если отвечает, но health-calc не видит — проверьте URL в конфиге
+# If no response — network or Prometheus issue
+# If it responds but health-calc doesn't see it — check URL in config
 ```
 
-**Шаг 3. Проверьте PromQL-запросы**
+**Step 3. Check PromQL queries**
 
-Выполните PromQL-запрос из конфига вручную:
+Execute the PromQL query from the config manually:
 
 ```bash
 curl "http://prometheus:9090/api/v1/query?query=avg(up)"
 ```
 
-Если запрос возвращает ошибку — исправьте PromQL в конфиге.
+If the query returns an error — fix the PromQL in the config.
 
-**Шаг 4. Проверьте circuit breaker**
+**Step 4. Check the circuit breaker**
 
 ```bash
 curl http://localhost:8080/circuit-breaker
 ```
 
-Если `state: "open"` — Prometheus недоступен и CB блокирует запросы.
+If `state: "open"` — Prometheus is unreachable and the CB is blocking requests.
 
-## Rate limit срабатывает слишком часто
+## Rate limit triggers too often
 
-**Симптом:** curl возвращает `429 Too Many Requests` при нормальной нагрузке.
+**Symptom:** curl returns `429 Too Many Requests` under normal load.
 
-**Шаг 1. Проверьте whitelist**
+**Step 1. Check the whitelist**
 
 ```bash
-# Убедитесь, что ваш IP в whitelist
-# Например, для localhost:
+# Make sure your IP is in the whitelist
+# For example, for localhost:
 rate_limit:
   whitelist:
     - "127.0.0.1"
 ```
 
-**Шаг 2. Проверьте, какой лимит срабатывает**
+**Step 2. Check which limit is triggered**
 
-В логах пишется IP и endpoint:
+The logs show the IP and endpoint:
 
 ```
 Rate limit exceeded for IP 192.168.1.100 on endpoint /health
 ```
 
-**Шаг 3. Увеличьте лимиты**
+**Step 3. Increase limits**
 
 ```yaml
 rate_limit:
   per_ip_rate:
-    "/health": "60/m"   # Было 10/m
+    "/health": "60/m"   # Was 10/m
 ```
 
-**Шаг 4. Проверьте X-RateLimit headers**
+**Step 4. Check X-RateLimit headers**
 
 ```bash
 curl -v http://localhost:8080/health 2>&1 | grep -i rate
@@ -134,57 +136,57 @@ curl -v http://localhost:8080/health 2>&1 | grep -i rate
 # < X-RateLimit-Remaining: 59
 ```
 
-`X-RateLimit-Remaining: 0` — значит лимит исчерпан.
+`X-RateLimit-Remaining: 0` — means the limit is exhausted.
 
-## Circuit breaker постоянно открыт
+## Circuit breaker constantly open
 
-**Симптом:** `curl /circuit-breaker` показывает `"state": "open"`.
+**Symptom:** `curl /circuit-breaker` shows `"state": "open"`.
 
-**Шаг 1. Проверьте Prometheus**
+**Step 1. Check Prometheus**
 
 ```bash
 curl http://prometheus:9090/-/ready
 ```
 
-Если не отвечает — проблема в Prometheus.
+If no response — Prometheus is the issue.
 
-**Шаг 2. Проверьте timeout**
+**Step 2. Check timeout**
 
-Увеличьте timeout в конфиге, если Prometheus отвечает медленно:
+Increase the timeout in the config if Prometheus is slow to respond:
 
 ```yaml
 prometheus:
   timeout: "30s"
 ```
 
-**Шаг 3. Проверьте настройки CB**
+**Step 3. Check CB settings**
 
-Для нестабильного Prometheus:
+For an unstable Prometheus:
 
 ```yaml
 circuit_breaker:
-  max_failures: 10     # Больше терпимости
-  reset_timeout: "60s" # Дольше ждать перед пробой
+  max_failures: 10     # More tolerance
+  reset_timeout: "60s" # Longer wait before retry
 ```
 
-**Шаг 4. Сбросьте circuit breaker**
+**Step 4. Reset the circuit breaker**
 
-CB не имеет API для ручного сброса (защита от каскадных сбоев). Дождитесь `reset_timeout` или перезапустите сервис.
+The CB has no API for manual reset (protection against cascading failures). Wait for `reset_timeout` or restart the service.
 
-## Алерты не приходят в Telegram
+## Alerts not arriving in Telegram
 
-**Симптом:** Prometheus недоступен, но Telegram-уведомлений нет.
+**Symptom:** Prometheus is unreachable, but no Telegram notification.
 
-**Шаг 1. Проверьте credentials**
+**Step 1. Check credentials**
 
 ```bash
-# В логах должно быть:
+# Logs should show:
 # ALERT would be sent - no Telegram credentials configured
 ```
 
-Если это сообщение есть — `bot_token` или `chat_id` пустые.
+If this message appears — `bot_token` or `chat_id` are empty.
 
-**Шаг 2. Проверьте переменные окружения**
+**Step 2. Check environment variables**
 
 ```yaml
 alerting:
@@ -193,49 +195,49 @@ alerting:
     chat_id: "${TELEGRAM_CHAT_ID}"
 ```
 
-Убедитесь, что переменные `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` заданы:
+Make sure the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` variables are set:
 
 ```bash
 echo $TELEGRAM_BOT_TOKEN
 echo $TELEGRAM_CHAT_ID
 ```
 
-**Шаг 3. Проверьте порог алертов**
+**Step 3. Check alert threshold**
 
 ```yaml
 prometheus_unavailable_alert_threshold: 3
 ```
 
-Алерт отправляется только после 3 последовательных неудач. Если Prometheus переодически доступен — порог не будет превышен.
+The alert is only sent after 3 consecutive failures. If Prometheus is intermittently available — the threshold won't be exceeded.
 
-**Шаг 4. Проверьте бота**
+**Step 4. Check the bot**
 
-Напишите боту любое сообщение в Telegram. Если бот не отвечает — его могли заблокировать или отозвать токен.
+Send any message to the bot in Telegram. If the bot doesn't respond — it may have been blocked or the token revoked.
 
-## Метрики не появляются в Prometheus
+## Metrics not showing up in Prometheus
 
-**Симптом:** Prometheus не видит `platform_health_score`.
+**Symptom:** Prometheus does not see `platform_health_score`.
 
-**Шаг 1. Проверьте, отвечает ли `/metrics`**
+**Step 1. Check if `/metrics` responds**
 
 ```bash
 curl http://localhost:8080/metrics | grep platform_health_score
 ```
 
-Если метрика есть — проблема в сборе Prometheus (scrape config).
+If the metric exists — the issue is in Prometheus scrape config.
 
-**Шаг 2. Проверьте target в Prometheus**
+**Step 2. Check targets in Prometheus**
 
 ```bash
-# В веб-интерфейсе Prometheus:
-# Status → Targets → ищите health-calculator
-# Или через API:
+# In the Prometheus web interface:
+# Status → Targets → look for health-calculator
+# Or via API:
 curl http://prometheus:9090/api/v1/targets
 ```
 
-Target должен быть `UP`.
+Target should be `UP`.
 
-**Шаг 3. Добавьте job в prometheus.yml**
+**Step 3. Add the job in prometheus.yml**
 
 ```yaml
 scrape_configs:
@@ -247,82 +249,82 @@ scrape_configs:
 
 ## Kubernetes probe fails
 
-**Симптом:** Pod перезапускается, в events `Liveness probe failed`.
+**Symptom:** Pod restarts, events show `Liveness probe failed`.
 
-**Шаг 1. Проверьте логи перед failure**
+**Step 1. Check logs before failure**
 
 ```bash
 kubectl logs -l app=health-calculator --tail=20
 ```
 
-**Шаг 2. Проверьте readiness**
+**Step 2. Check readiness**
 
 ```bash
 kubectl exec -it <pod> -- curl http://localhost:8080/ready
 ```
 
-Если `not_ready` — вероятно, сервис не успел выполнить первый расчёт.
+If `not_ready` — the service likely hasn't completed its first calculation.
 
-**Шаг 3. Увеличьте `initialDelaySeconds`**
+**Step 3. Increase `initialDelaySeconds`**
 
 ```yaml
 livenessProbe:
-  initialDelaySeconds: 60  # Было 30 — дать больше времени на первый расчёт
+  initialDelaySeconds: 60  # Was 30 — give more time for first calculation
 ```
 
-**Шаг 4. Проверьте ресурсы**
+**Step 4. Check resources**
 
 ```bash
 kubectl describe pod <pod> | grep -A5 "Events"
 ```
 
-Если `OOMKilled` — увеличьте `memory.limits`.
+If `OOMKilled` — increase `memory.limits`.
 
-## Паника в сервисе
+## Panic in the service
 
-**Симптом:** сервис упал, в логах `panic:`.
+**Symptom:** service crashed, logs show `panic:`.
 
-**Шаг 1. Найдите панику в логах**
+**Step 1. Find the panic in logs**
 
 ```bash
 kubectl logs --previous -l app=health-calculator | grep -A10 panic
 ```
 
-**Шаг 2. Восстановите сервис**
+**Step 2. Restore the service**
 
 ```bash
 kubectl rollout restart deployment/health-calculator
 ```
 
-**Шаг 3. Предотвратите повторение**
+**Step 3. Prevent recurrence**
 
-Сервис имеет `recoveryMiddleware`, который ловит паники в HTTP-handler'ах и возвращает 500. Если паника происходит вне HTTP (например, в горутине расчёта), сервис упадёт. Проверьте кэш, конфиг и запросы на nil.
+The service has `recoveryMiddleware` that catches panics in HTTP handlers and returns 500. If a panic occurs outside HTTP (e.g., in a calculation goroutine), the service will crash. Check cache, config, and nil references.
 
-## Config hot-reload не работает
+## Config hot-reload not working
 
-**Симптом:** меняете `health-config.yaml`, но сервис продолжает работать по-старому.
+**Symptom:** you change `health-config.yaml` but the service continues using the old config.
 
-**Шаг 1. Проверьте логи**
+**Step 1. Check logs**
 
 ```bash
-# Ищите сообщение:
+# Look for the message:
 # Config loaded successfully: 4 metrics, update interval: 5m0s
-# или
+# or
 # Failed to reload config: ...
 ```
 
-**Шаг 2. Проверьте, что конфиг валиден**
+**Step 2. Check that the config is valid**
 
 ```bash
-# Скопируйте конфиг в онлайн-валидатор YAML
-# или проверьте вручную:
+# Copy the config into an online YAML validator
+# or check manually:
 python3 -c "import yaml; yaml.safe_load(open('health-config.yaml'))"
 ```
 
-**Шаг 3. Проверьте сумму весов**
+**Step 3. Check the sum of weights**
 
 ```bash
-# Рассчитайте сумму weight всех метрик
+# Calculate the sum of all metric weights
 python3 -c "
 import yaml
 cfg = yaml.safe_load(open('health-config.yaml'))
@@ -332,10 +334,10 @@ assert abs(total - 1.0) < 0.001, 'Weights must sum to 1.0'
 "
 ```
 
-## Диагностические команды
+## Diagnostic commands
 
 ```bash
-# Полный health-check
+# Full health-check
 curl http://localhost:8080/health | jq .
 
 # Readiness probe
@@ -347,25 +349,25 @@ curl http://localhost:8080/circuit-breaker | jq .
 # Prometheus metrics
 curl -s http://localhost:8080/metrics | grep -E "^(platform_health|health_calculator|service_uptime)"
 
-# Проверка rate limit headers
+# Check rate limit headers
 curl -v http://localhost:8080/health 2>&1 | grep -i rate-limit
 
-# Логи сервиса (Docker)
+# Service logs (Docker)
 docker logs health-calculator --tail 50
 
-# Логи сервиса (Kubernetes)
+# Service logs (Kubernetes)
 kubectl logs -l app=health-calculator --tail 50
 
-# Проверка доступности Prometheus
+# Check Prometheus availability
 curl -s http://prometheus:9090/-/healthy
 
-# Go pprof (если включён)
+# Go pprof (if enabled)
 curl http://localhost:8080/debug/pprof/heap -o heap.prof
 go tool pprof heap.prof
 ```
 
 ---
 
-| Назад |
-|-------|
-| [Production-эксплуатация](05-operations.md) |
+| Back |
+|------|
+| [Production operations](05-operations.md) |

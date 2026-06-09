@@ -1,78 +1,80 @@
+> [Русская версия](ru/rate-limiting.md)
+
 # Rate Limiting Implementation
 
-> Подробнее про конфигурацию: [Конфигурация → rate_limit](03-configuration.md#rate_limit)
-> Назад к навигации: [index](index.md)
+> See also: [Configuration → rate_limit](03-configuration.md#rate_limit)
+> Back to navigation: [index](index.md)
 
 
 
-## Обзор
+## Overview
 
-Rate limiting реализован для защиты сервиса от перегрузки и злоупотреблений. Использует leaky bucket алгоритм с настраиваемыми лимитами.
+Rate limiting protects the service from overload and abuse. It uses the leaky bucket algorithm with configurable limits.
 
-## Как это работает
+## How It Works
 
 ### 1. Leaky Bucket Algorithm
 
-- Каждый IP и/или endpoint имеет свой bucket с токенами
-- Запрос потребляет токен
-- Токены восполняются с постоянной скоростью
-- Когда все токены израсходованы - запросы блокируются
+- Each IP and/or endpoint has its own bucket with tokens
+- A request consumes one token
+- Tokens replenish at a constant rate
+- When all tokens are exhausted, requests are blocked
 
-### 2. Уровни лимитов
+### 2. Limit Levels
 
 **Global Rate Limiter**
-- Применяется ко всем запросам на endpoint независимо от IP
-- Полезно для защиты от DDoS атак
+- Applied to all requests on an endpoint regardless of IP
+- Useful for DDoS attack protection
 
 **Per-IP Rate Limiter**
-- Применяется индивидуально к каждому IP адресу
-- Позволяет различным клиентам иметь свои лимиты
+- Applied individually to each IP address
+- Allows different clients to have their own limits
 
 ### 3. Whitelist
 
-IP адреса в whitelist игнорируют rate limiting:
-- Локальные адреса (127.0.0.1, ::1) по умолчанию
-- Можно добавить любые IP в конфиге
+IP addresses in the whitelist bypass rate limiting:
+- Local addresses (127.0.0.1, ::1) by default
+- Any IP can be added in the config
 
 ## Configuration
 
 ```yaml
 rate_limit:
-  enabled: true                    # Включить/выключить rate limiting
-  global_rate:                     # Глобальные лимиты
-    "/metrics": "100/m"            # 100 запросов в минуту
-    "/health": "60/m"              # 60 запросов в минуту
-  per_ip_rate:                     # Лимиты на IP
-    "/health": "10/m"              # 10 запросов в минуту на IP
-    "/circuit-breaker": "20/m"     # 20 запросов в минуту на IP
-  whitelist:                        # Исключенные IP
+  enabled: true                    # Enable/disable rate limiting
+  global_rate:                     # Global rate limits
+    "/metrics": "100/m"            # 100 requests per minute
+    "/health": "60/m"              # 60 requests per minute
+  per_ip_rate:                     # Per-IP rate limits
+    "/health": "10/m"              # 10 requests per minute per IP
+    "/circuit-breaker": "20/m"     # 20 requests per minute per IP
+  whitelist:                        # Excluded IPs
     - "127.0.0.1"
     - "::1"
     - "10.0.0.0/8"
 ```
 
-### Формат Rate
+### Rate Format
 
-Формат: `requests/period`
+Format: `requests/period`
 
-- `10/s` - 10 запросов в секунду
-- `100/m` - 100 запросов в минуту
-- `5/h` - 5 запросов в час
+- `10/s` - 10 requests per second
+- `100/m` - 100 requests per minute
+- `5/h` - 5 requests per hour
 
 ## Middleware Integration
 
-Rate limiting применяется через middleware к HTTP handlers:
+Rate limiting is applied via middleware to HTTP handlers:
 
 ```go
 mux.HandleFunc("/health", calculator.wrapWithRateLimit(calculator.healthHandler))
 ```
 
-- `/metrics` endpoint не имеет rate limiting
-- Все остальные endpoints защищены
+- `/metrics` endpoint has no rate limiting
+- All other endpoints are protected
 
-## При превышении лимита
+## When Limit Is Exceeded
 
-Возвращается HTTP 429 Too Many Requests:
+Returns HTTP 429 Too Many Requests:
 ```json
 {
   "error": "rate_limit_exceeded",
@@ -82,77 +84,77 @@ mux.HandleFunc("/health", calculator.wrapWithRateLimit(calculator.healthHandler)
 ```
 
 Headers:
-- `X-RateLimit-Limit` - допустимое количество
-- `X-RateLimit-Remaining` - оставшиеся запросы
-- `X-RateLimit-Reset` - время сброса лимита
+- `X-RateLimit-Limit` — allowed request count
+- `X-RateLimit-Remaining` — remaining requests
+- `X-RateLimit-Reset` — limit reset time
 
-## Мониторинг
+## Monitoring
 
-### Prometheus метрики
+### Prometheus Metrics
 
-- `health_calculator_rate_limit_exceeded_total` - количество заблокированных запросов
-- `health_calculator_active_rate_limit_clients` - активных клиентов (bucket'ов)
+- `health_calculator_rate_limit_exceeded_total` — number of blocked requests
+- `health_calculator_active_rate_limit_clients` — active clients (buckets)
 
-### Логирование
+### Logging
 
-Каждый заблокированный запрос логируется:
+Every blocked request is logged:
 ```
 Rate limit exceeded for IP 192.168.1.1 on endpoint /health
 ```
 
-## Оптимизация
+## Optimization
 
-### Автоматическая очистка
+### Automatic Cleanup
 
-Неактивные bucket'ы удаляются через 5 минут для экономии памяти.
+Inactive buckets are removed after 5 minutes to save memory.
 
-### Поддержка прокси
+### Proxy Support
 
-Middleware корректно обрабатывает:
+The middleware correctly handles:
 - `X-Forwarded-For` header
 - `X-Real-IP` header
-- `RemoteAddr` как fallback
+- `RemoteAddr` as fallback
 
-## Примеры использования
+## Usage Examples
 
-### 1. Защита API endpoint
+### 1. Protecting an API Endpoint
 
 ```yaml
 per_ip_rate:
-  "/api/v1/data": "10/m"  # Клиенты не могут спамить API
+  "/api/v1/data": "10/m"  # Clients cannot spam the API
 ```
 
-### 2. Ограничение health checks
+### 2. Limiting Health Checks
 
 ```yamlper_ip_rate:
-  "/health": "1/m"         # 1 health check в минуту на сервис
+  "/health": "1/m"         # 1 health check per minute per service
 ```
 
-### 3. Исключение мониторинга
+### 3. Excluding Monitoring
 
 ```yaml
 whitelist:
-  - "10.0.0.0/8"          # Внутренняя сеть без лимитов
+  - "10.0.0.0/8"          # Internal network without limits
 ```
 
-## Настройка для production
+## Production Configuration
 
-Рекомендуемые значения:
+Recommended values:
 
-**Для public API:**
+**For public API:**
 ```yaml
 global_rate:
-  "/": "1000/m"             # Глобальная защита
+  "/": "1000/m"             # Global protection
 per_ip_rate:
-  "/api/": "100/m"          # Разумные лимиты на клиента
+  "/api/": "100/m"          # Reasonable per-client limits
 ```
 
-**Для internal сервисов:**
+**For internal services:**
 ```yaml
 whitelist:
-  - "10.0.0.0/8"           # Вся внутренняя сеть в whitelist
+  - "10.0.0.0/8"           # Entire internal network in whitelist
 ```
 
-**Для metrics endpoint:**
-- Без rate limiting (только аутентификация)
-- Rate limiting на уровне прокси/ingress
+**For metrics endpoint:**
+- No rate limiting (authentication only)
+- Rate limiting at the proxy/ingress level

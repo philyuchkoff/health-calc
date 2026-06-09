@@ -1,31 +1,33 @@
-# Быстрый старт
+> [Русская версия](ru/01-quickstart.md)
 
-Запустить Health Calculator за 5 минут.
+# Quickstart
+
+Run Health Calculator in 5 minutes.
 
 ---
 
-## 1. Скачать
+## 1. Download
 
 ```bash
 git clone https://github.com/your-org/health-calc.git
 cd health-calc
 ```
 
-Или установить через `go install` (если есть Go 1.23+):
+Or install via `go install` (requires Go 1.23+):
 
 ```bash
 go install github.com/your-org/health-calc@latest
 ```
 
-## 2. Настроить
+## 2. Configure
 
-Скопировать и отредактировать конфиг:
+Copy and edit the config:
 
 ```bash
 cp health-config.yaml health-config.yaml
 ```
 
-Минимальный рабочий конфиг:
+Minimal working config:
 
 ```yaml
 update_interval: "5m"
@@ -42,17 +44,17 @@ metrics:
     max_valid_value: 1.0
 ```
 
-Все поля и их описание — в разделе [Конфигурация](03-configuration.md).
+All fields and their descriptions are in the [Configuration](03-configuration.md) section.
 
-## 3. Запустить
+## 3. Run
 
 ```bash
 go run .
 ```
 
-Сервис запустится на `:8080`.
+The service will start on `:8080`.
 
-## 4. Проверить
+## 4. Verify
 
 ```bash
 # Health check
@@ -65,7 +67,7 @@ curl http://localhost:8080/metrics | grep platform_health_score
 curl http://localhost:8080/circuit-breaker
 ```
 
-## 5. Docker (альтернативный способ)
+## 5. Docker (alternative)
 
 ```bash
 docker build -t health-calculator .
@@ -74,10 +76,10 @@ docker run -p 8080:8080 \
   health-calculator
 ```
 
-Подробнее про установку — в разделе [Установка](02-installation.md).
+For more details on installation, see the [Installation](02-installation.md) section.
 
 ---
 
-| Назад | Дальше |
-|-------|--------|
-| [index](index.md) | [Установка](02-installation.md) |
+| Back | Next |
+|------|------|
+| [index](index.md) | [Installation](02-installation.md) |

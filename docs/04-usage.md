@@ -1,40 +1,42 @@
-# Запуск и API
+> [Русская версия](ru/04-usage.md)
 
-## Содержание
+# Running and API
 
-- [Запуск](#запуск)
+## Contents
+
+- [Running](#running)
 - [Endpoints](#endpoints)
   - [`GET /metrics` — Prometheus metrics](#get-metrics--prometheus-metrics)
   - [`GET /health` — Liveness probe](#get-health--liveness-probe)
   - [`GET /ready` — Readiness probe](#get-ready--readiness-probe)
-  - [`GET /circuit-breaker` — статус CB](#get-circuit-breaker--статус-cb)
+  - [`GET /circuit-breaker` — CB status](#get-circuit-breaker--cb-status)
   - [`GET /` — Status page](#get----status-page)
-- [Примеры использования](#примеры-использования)
+- [Usage examples](#usage-examples)
 - [Graceful shutdown](#graceful-shutdown)
-- [Логирование](#логирование)
+- [Logging](#logging)
 
 ---
 
-## Запуск
+## Running
 
 ```bash
-# Локально (dev)
+# Locally (dev)
 go run .
 
-# Собранный бинарник
+# Built binary
 ./health-calculator
 
 # Docker
 docker run -p 8080:8080 -v $(pwd)/health-config.yaml:/root/health-config.yaml:ro health-calculator
 ```
 
-Проверить, что сервис запущен:
+Verify the service is running:
 
 ```bash
 curl -s http://localhost:8080/health | jq .
 ```
 
-Ожидаемый ответ:
+Expected response:
 
 ```json
 {
@@ -52,41 +54,41 @@ curl -s http://localhost:8080/health | jq .
 
 ### `GET /metrics` — Prometheus metrics
 
-Стандартный Prometheus endpoint. Без rate limiting.
+Standard Prometheus endpoint. No rate limiting.
 
 ```bash
 curl -s http://localhost:8080/metrics | grep platform_health_score
 ```
 
-Основные метрики сервиса:
+Main service metrics:
 
-| Метрика | Тип | Описание |
-|---------|-----|----------|
-| `platform_health_score` | Gauge | Итоговый health score (`0.0 – 1.0`) |
-| `health_calculator_metrics_fetched_total` | Counter | Успешные запросы к Prometheus |
-| `health_calculator_metrics_failed_total` | Counter | Неудачные запросы к Prometheus |
-| `health_calculator_calculation_duration_seconds` | Histogram | Время расчёта |
-| `health_calculator_circuit_breaker_tripped_total` | Counter | Сколько раз CB открывался |
-| `health_calculator_degraded_mode` | Gauge | `1` если сервис в degraded-режиме |
-| `health_calculator_fallback_used_total` | Counter | Сколько раз использован fallback |
-| `health_calculator_rate_limit_exceeded_total` | Counter | Заблокировано запросов |
-| `health_calculator_active_rate_limit_clients` | Gauge | Активных клиентов rate limiter |
-| `health_calculator_config_reload_total` | Counter | Попыток перезагрузить конфиг |
-| `service_uptime_seconds` | Gauge | Время работы сервиса |
-| `health_calculator_prometheus_connection_errors_total` | Counter | Ошибок соединения с Prometheus |
+| Metric | Type | Description |
+|--------|------|-------------|
+| `platform_health_score` | Gauge | Final health score (`0.0 – 1.0`) |
+| `health_calculator_metrics_fetched_total` | Counter | Successful Prometheus requests |
+| `health_calculator_metrics_failed_total` | Counter | Failed Prometheus requests |
+| `health_calculator_calculation_duration_seconds` | Histogram | Calculation time |
+| `health_calculator_circuit_breaker_tripped_total` | Counter | Number of times CB opened |
+| `health_calculator_degraded_mode` | Gauge | `1` if service is in degraded mode |
+| `health_calculator_fallback_used_total` | Counter | Number of times fallback was used |
+| `health_calculator_rate_limit_exceeded_total` | Counter | Blocked requests |
+| `health_calculator_active_rate_limit_clients` | Gauge | Active rate limiter clients |
+| `health_calculator_config_reload_total` | Counter | Config reload attempts |
+| `service_uptime_seconds` | Gauge | Service uptime |
+| `health_calculator_prometheus_connection_errors_total` | Counter | Prometheus connection errors |
 
 ### `GET /health` — Liveness probe
 
-Используется Kubernetes для проверки, жив ли сервис (liveness probe).
+Used by Kubernetes to check if the service is alive (liveness probe).
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-**Ответы:**
+**Responses:**
 
 ```json
-// ✅ Сервис здоров — HTTP 200
+// ✅ Service healthy — HTTP 200
 {
   "status": "healthy",
   "last_successful_calculation": "2026-06-09T12:00:00Z",
@@ -95,7 +97,7 @@ curl http://localhost:8080/health
   "circuit_breaker": { "state": "closed" }
 }
 
-// ⚠️ Часть метрик в fallback — HTTP 200
+// ⚠️ Some metrics are using fallback — HTTP 200
 {
   "status": "degraded",
   "reason": "some metrics are using fallback values",
@@ -103,14 +105,14 @@ curl http://localhost:8080/health
   ...
 }
 
-// 🔴 Circuit breaker открыт — HTTP 200
+// 🔴 Circuit breaker is open — HTTP 200
 {
   "status": "degraded",
   "reason": "circuit breaker is open",
   ...
 }
 
-// 🔴 Давно не было расчёта — HTTP 503
+// 🔴 No recent calculation — HTTP 503
 {
   "status": "unhealthy",
   "reason": "last calculation too old: 15m0s",
@@ -118,42 +120,42 @@ curl http://localhost:8080/health
 }
 ```
 
-**Логика определения статуса:**
+**Status determination logic:**
 
 ```
-если last_calculation > 10 минут назад → status = "unhealthy" (503)
-иначе если degraded → status = "degraded"
-иначе если circuit breaker open → status = "degraded"
-иначе → status = "healthy" (200)
+if last_calculation > 10 minutes ago → status = "unhealthy" (503)
+else if degraded → status = "degraded"
+else if circuit breaker open → status = "degraded"
+else → status = "healthy" (200)
 ```
 
 ### `GET /ready` — Readiness probe
 
-Используется Kubernetes для проверки, готов ли сервис принимать трафик (readiness probe).
+Used by Kubernetes to check if the service is ready to accept traffic (readiness probe).
 
 ```bash
 curl http://localhost:8080/ready
 ```
 
-Отличия от `/health`:
-- Возвращает `503` пока не загружен конфиг и не выполнен первый расчёт
-- Возвращает `503` если последний расчёт был более 10 минут назад
-- Возвращает `200` даже в degraded-режиме (сервис работает, пусть и не в полную силу)
+Differences from `/health`:
+- Returns `503` until config is loaded and the first calculation is performed
+- Returns `503` if the last calculation was more than 10 minutes ago
+- Returns `200` even in degraded mode (service is working, though not at full capacity)
 
 ```json
-// ✅ Готов — HTTP 200
+// ✅ Ready — HTTP 200
 { "status": "ready" }
 
-// ⚠️ Готов, но degraded — HTTP 200
+// ⚠️ Ready but degraded — HTTP 200
 { "status": "ready_degraded" }
 
-// 🔴 Не готов — HTTP 503
+// 🔴 Not ready — HTTP 503
 { "status": "not_ready", "reason": "service has not completed initial startup" }
 ```
 
-### `GET /circuit-breaker` — статус CB
+### `GET /circuit-breaker` — CB status
 
-Показывает текущее состояние circuit breaker:
+Shows the current state of the circuit breaker:
 
 ```bash
 curl http://localhost:8080/circuit-breaker
@@ -167,43 +169,43 @@ curl http://localhost:8080/circuit-breaker
 }
 ```
 
-Поле `state` может быть: `closed`, `open`, `half-open`.
+The `state` field can be: `closed`, `open`, `half-open`.
 
-Полезно для мониторинга и отладки — можно алертнуть по `state == "open"`.
+Useful for monitoring and debugging — you can alert on `state == "open"`.
 
 ### `GET /` — Status page
 
-Возвращает простой текст:
+Returns simple text:
 
 ```
 Health Calculator Service
 ```
 
-Используется для базовой проверки, что сервер отвечает.
+Used for basic health check that the server is responding.
 
 ---
 
-## Примеры использования
+## Usage examples
 
-### Мониторинг в Grafana
+### Monitoring in Grafana
 
-PromQL-запросы для дашборда:
+PromQL queries for a dashboard:
 
 ```promql
-# Текущий health score
+# Current health score
 platform_health_score
 
-# Динамика за последние 7 дней
+# Trend over the last 7 days
 avg_over_time(platform_health_score[7d])
 
-# Сервис в degraded режиме
+# Service in degraded mode
 health_calculator_degraded_mode
 
-# Частота ошибок Prometheus
+# Prometheus error rate
 rate(health_calculator_metrics_failed_total[5m])
 ```
 
-### Алерты в Prometheus
+### Alerts in Prometheus
 
 ```yaml
 groups:
@@ -232,17 +234,17 @@ groups:
 
 ## Graceful shutdown
 
-Сервис корректно обрабатывает сигналы `SIGINT` и `SIGTERM`:
+The service handles `SIGINT` and `SIGTERM` signals correctly:
 
 ```
-1. Получен сигнал (SIGINT / SIGTERM)
-2. Отменяется контекст (cancel)
-3. Останавливается ticker
-4. Сервер HTTP завершает текущие запросы (таймаут 10 секунд)
-5. Сервис завершает работу
+1. Signal received (SIGINT / SIGTERM)
+2. Context cancelled
+3. Ticker stopped
+4. HTTP server finishes pending requests (10 second timeout)
+5. Service exits
 ```
 
-Логи при shutdown:
+Logs on shutdown:
 
 ```
 Received signal: interrupt, shutting down...
@@ -252,9 +254,9 @@ Health Calculator Service stopped gracefully
 
 ---
 
-## Логирование
+## Logging
 
-Логи выводятся в JSON (в production) или текст (в dev):
+Logs are output as JSON (in production) or text (in dev):
 
 ```json
 {"level":"info","service":"health-calculator","source":"calculator","message":"Health score updated: 0.8943 (from 4 metrics, 0 degraded, factor 1.00, took 450ms)","time":"2026-06-09T12:00:00Z"}
@@ -262,16 +264,16 @@ Health Calculator Service stopped gracefully
 {"level":"warn","service":"health-calculator","source":"prometheus","message":"Retry 1/3 for metric api_success_rate failed: prometheus returned status: 503","time":"2026-06-09T12:00:01Z"}
 ```
 
-Все логи содержат поля:
-- `time` — временная метка (RFC3339)
-- `level` — уровень: `debug`, `info`, `warn`, `error`
-- `service` — имя сервиса
-- `source` — модуль: `prometheus`, `calculator`, `config`, `alerting`, `rate_limit`, `http`
-- `message` — сообщение
-- `request_id` — (опционально) ID запроса для трейсинга
+All logs contain the following fields:
+- `time` — timestamp (RFC3339)
+- `level` — level: `debug`, `info`, `warn`, `error`
+- `service` — service name
+- `source` — module: `prometheus`, `calculator`, `config`, `alerting`, `rate_limit`, `http`
+- `message` — log message
+- `request_id` — (optional) request ID for tracing
 
 ---
 
-| Назад | Дальше |
-|-------|--------|
-| [Конфигурация](03-configuration.md) | [Production-эксплуатация](05-operations.md) |
+| Previous | Next |
+|----------|------|
+| [Configuration](03-configuration.md) | [Production operations](05-operations.md) |

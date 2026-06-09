@@ -1,96 +1,98 @@
-# Установка
+> [Русская версия](ru/02-installation.md)
 
-## Содержание
+# Installation
 
-- [Требования](#требования)
-- [Скачивание репозитория](#скачивание-репозитория)
-- [Сборка из исходников](#сборка-из-исходников)
-- [Запуск через Go (dev-режим)](#запуск-через-go-dev-режим)
+## Contents
+
+- [Requirements](#requirements)
+- [Downloading the Repository](#downloading-the-repository)
+- [Building from Source](#building-from-source)
+- [Running via Go (dev mode)](#running-via-go-dev-mode)
 - [Docker](#docker)
 - [Cross-compilation](#cross-compilation)
-- [Проверка установки](#проверка-установки)
+- [Verifying Installation](#verifying-installation)
 
 ---
 
-## Требования
+## Requirements
 
-| Компонент | Версия | Зачем |
-|-----------|--------|-------|
-| Go | 1.23+ | Сборка из исходников |
-| Docker | 20.x+ | Контейнеризация (опционально) |
-| Prometheus | любая | Источник данных |
-| Telegram Bot | — | Алерты (опционально) |
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| Go | 1.23+ | Building from source |
+| Docker | 20.x+ | Containerization (optional) |
+| Prometheus | any | Data source |
+| Telegram Bot | — | Alerts (optional) |
 
-## Скачивание репозитория
+## Downloading the Repository
 
 ```bash
 git clone https://github.com/your-org/health-calc.git
 cd health-calc
 ```
 
-После клонирования структура директории:
+After cloning, the directory structure:
 
 ```
 health-calc/
-├── calc.go                  # Основной сервис
+├── calc.go                  # Core service
 ├── circuitbreaker.go        # Circuit breaker
 ├── ratelimit.go             # Rate limiting
-├── logging.go               # Структурированное логирование
-├── health-config.yaml       # Конфигурационный файл
-├── Dockerfile               # Для сборки образа
-├── go.mod / go.sum          # Go-зависимости
-├── docs/                    # Документация
+├── logging.go               # Structured logging
+├── health-config.yaml       # Configuration file
+├── Dockerfile               # For building the image
+├── go.mod / go.sum          # Go dependencies
+├── docs/                    # Documentation
 └── .github/workflows/       # CI
 ```
 
-## Сборка из исходников
+## Building from Source
 
 ```bash
-# Установить зависимости
+# Install dependencies
 go mod download
 
-# Собрать бинарник
+# Build the binary
 go build -ldflags="-w -s" -o health-calculator
 
-# Проверить, что бинарник собран
+# Verify the binary is built
 ./health-calculator &
 ```
 
-Флаги сборки:
+Build flags:
 
-| Флаг | Что делает |
-|------|------------|
-| `-ldflags="-w -s"` | Убирает DWARF-информацию и символы — бинарник меньше на ~30% |
-| `-o health-calculator` | Имя выходного файла |
+| Flag | What it does |
+|------|--------------|
+| `-ldflags="-w -s"` | Strips DWARF info and symbols — binary ~30% smaller |
+| `-o health-calculator` | Output file name |
 
-## Запуск через Go (dev-режим)
+## Running via Go (dev mode)
 
-Удобно для разработки и отладки:
+Convenient for development and debugging:
 
 ```bash
 go run .
 ```
 
-При каждом изменении кода нужно перезапускать — `Ctrl+C` и снова `go run .`.
+On every code change you need to restart — `Ctrl+C` and `go run .` again.
 
 ## Docker
 
-### Сборка образа
+### Building the Image
 
 ```bash
 docker build -t health-calculator .
 ```
 
-Используется multi-stage сборка:
+Uses multi-stage build:
 
 ```
-Stage 1 (builder):        golang:1.23-alpine → компиляция
-Stage 2 (runtime):        alpine:latest → только бинарник + config
+Stage 1 (builder):        golang:1.23-alpine → compilation
+Stage 2 (runtime):        alpine:latest → binary + config only
 ```
 
-Итоговый образ — ~16 MB.
+Final image size — ~16 MB.
 
-### Запуск контейнера
+### Running the Container
 
 ```bash
 docker run -p 8080:8080 \
@@ -100,17 +102,17 @@ docker run -p 8080:8080 \
   health-calculator
 ```
 
-Ключи:
+Options:
 
-| Параметр | Зачем |
-|----------|-------|
-| `-p 8080:8080` | Проброс порта |
-| `-v ...:ro` | Монтируем конфиг read-only (безопасность) |
-| `-e TELEGRAM_*` | Переменные окружения для Telegram |
+| Parameter | Purpose |
+|-----------|---------|
+| `-p 8080:8080` | Port forwarding |
+| `-v ...:ro` | Mount config read-only (security) |
+| `-e TELEGRAM_*` | Environment variables for Telegram |
 
 ### Docker Compose
 
-Поднять сервис вместе с VictoriaMetrics и Grafana для тестового окружения:
+Spin up the service alongside VictoriaMetrics and Grafana for a test environment:
 
 ```yaml
 version: "3"
@@ -132,7 +134,7 @@ services:
 
 ## Cross-compilation
 
-Собрать бинарник для другой платформы:
+Build a binary for another platform:
 
 ```bash
 # Linux amd64
@@ -145,13 +147,13 @@ GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s" -o health-calculator-darwin-a
 GOOS=windows GOARCH=amd64 go build -ldflags="-w -s" -o health-calculator.exe
 ```
 
-## Проверка установки
+## Verifying Installation
 
 ```bash
-# Убедиться, что сервис отвечает
+# Ensure the service responds
 curl -s http://localhost:8080/health | jq .
 
-# Ожидаемый ответ:
+# Expected response:
 # {
 #   "status": "healthy",
 #   "last_successful_calculation": "2026-06-09T12:00:00Z",
@@ -161,10 +163,10 @@ curl -s http://localhost:8080/health | jq .
 # }
 ```
 
-Если `jq` не установлен — просто `curl` без `| jq .`.
+If `jq` is not installed — just `curl` without `| jq .`.
 
 ---
 
-| Назад | Дальше |
-|-------|--------|
-| [Быстрый старт](01-quickstart.md) | [Конфигурация](03-configuration.md) |
+| Back | Next |
+|------|------|
+| [Quick Start](01-quickstart.md) | [Configuration](03-configuration.md) |

@@ -1,54 +1,54 @@
+> [Русская версия](ru/circuit-breaker.md)
+
 # Circuit Breaker Implementation
 
-> Подробнее про конфигурацию: [Конфигурация → circuit_breaker](03-configuration.md#circuit_breaker)
-> Назад к навигации: [index](index.md)
+> More about configuration: [Configuration → circuit_breaker](03-configuration.md#circuit_breaker)
+> Back to navigation: [index](index.md)
 
+The Circuit Breaker pattern is implemented to protect the service from cascading failures when Prometheus is unavailable. It prevents infinite connection attempts to a non-working service.
 
+## How It Works
 
-Circuit breaker паттерн внедрен для защиты сервиса от каскадных сбоев при недоступности Prometheus. Он предотвращает бесконечные попытки подключения к неработающему сервису.
+### Circuit Breaker States
 
-## Как это работает
+1. **Closed** - Normal state
+   - All requests pass to Prometheus
+   - Errors are counted
+   - When the error threshold is reached, transitions to Open
 
-### Состояния Circuit Breaker
+2. **Open** - Failure protection
+   - Requests to Prometheus are blocked
+   - Falls back immediately with value 0.5
+   - After reset_timeout, transitions to Half-Open
 
-1. **Closed** (Закрыт) - Нормальное состояние
-   - Все запросы проходят к Prometheus
-   - Ошибки подсчитываются
-   - При достижении порога ошибок переходит в Open
+3. **Half-Open** - Recovery check
+   - One request is allowed
+   - On success, transitions to Closed
+   - On failure, returns to Open
 
-2. **Open** (Открыт) - Защита от сбоев
-   - Запросы к Prometheus блокируются
-   - Сразу возвращается fallback значение (0.5)
-   - Через reset_timeout переходит в Half-Open
-
-3. **Half-Open** (Полуоткрыт) - Проверка восстановления
-   - Один запрос разрешен
-   - При успехе переходит в Closed
-   - При ошибке возвращается в Open
-
-### Конфигурация
+### Configuration
 
 ```yaml
 circuit_breaker:
-  max_failures: 3          # Сколько ошибок перед открытием
-  reset_timeout: "30s"     # Как долго оставаться открытым
+  max_failures: 3          # Number of failures before opening
+  reset_timeout: "30s"     # How long to stay open
 ```
 
-### Fallback стратегия
+### Fallback Strategy
 
-При открытом circuit breaker:
-- Возвращается нейтральное значение `0.5` для всех метрик
-- Это позволяет сервису продолжать работу с деградированным функционалом
+When the circuit breaker is open:
+- Returns neutral value `0.5` for all metrics
+- This allows the service to continue with degraded functionality
 
-## Мониторинг
+## Monitoring
 
-### Метрики
+### Metrics
 
-- `health_calculator_circuit_breaker_tripped_total` - сколько раз circuit breaker открывался
+- `health_calculator_circuit_breaker_tripped_total` - how many times the circuit breaker was opened
 
 ### Endpoints
 
-- `GET /circuit-breaker` - текущее состояние:
+- `GET /circuit-breaker` - current state:
 ```json
 {
   "name": "prometheus",
@@ -57,45 +57,45 @@ circuit_breaker:
 }
 ```
 
-### Логирование
+### Logging
 
-При изменении состояния автоматически логируется:
+State changes are logged automatically:
 ```
 Circuit breaker 'prometheus' changed state from closed to open
 ```
 
-## Использование в коде
+## Usage in Code
 
 ```go
-// Обернуть вызов в circuit breaker
+// Wrap a call in circuit breaker
 err := hc.circuitBreaker.Execute(func() error {
     value, err := hc.queryPrometheus(query)
     if err != nil {
         return err
     }
-    // обработка результата
+    // process result
     return nil
 })
 
 if err == ErrCircuitBreakerOpen {
-    // Использовать fallback значение
+    // Use fallback value
     return 0.5, nil
 }
 ```
 
-## Преимущества
+## Advantages
 
-1. **Защита от каскадных сбоев** - не истощает ресурсы при недоступности Prometheus
-2. **Быстрое реагирование** - не ждет таймаутов при открытом состоянии
-3. **Автоматическое восстановление** - периодически проверяет доступность сервиса
-4. **Наблюдаемость** - полное visibility через метрики и эндпоинты
+1. **Protection from cascading failures** - does not exhaust resources when Prometheus is unavailable
+2. **Fast response** - does not wait for timeouts in the open state
+3. **Automatic recovery** - periodically checks service availability
+4. **Observability** - full visibility through metrics and endpoints
 
-## Настройка для production
+## Production Configuration
 
-Рекомендуемые значения:
-- `max_failures: 5` - больше терпимости к временным сбоям
-- `reset_timeout: "60s"` - дольше ждать восстановления
+Recommended values:
+- `max_failures: 5` - more tolerance for temporary failures
+- `reset_timeout: "60s"` - longer wait for recovery
 
-Для high-load систем:
-- Уменьшить `reset_timeout` для быстрого восстановления
-- Увеличить `max_failures` для защиты от флапов
+For high-load systems:
+- Reduce `reset_timeout` for faster recovery
+- Increase `max_failures` to protect against flapping

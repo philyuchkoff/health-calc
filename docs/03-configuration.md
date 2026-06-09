@@ -1,15 +1,17 @@
-# Конфигурация
+> [Русская версия](ru/03-configuration.md)
 
-Сервис читает YAML-файл `health-config.yaml`. Путь к файлу жёстко задан в коде (см. `calc.go:Start`).
+# Configuration
 
-Конфиг перечитывается каждую минуту (hot-reload) — можно менять настройки без перезапуска.
+The service reads a YAML file `health-config.yaml`. The file path is hardcoded in the code (see `calc.go:Start`).
+
+The config is re-read every minute (hot-reload) — settings can be changed without restart.
 
 ---
 
-## Содержание
+## Contents
 
-- [Полный пример](#полный-пример)
-- [Секции конфига](#секции-конфига)
+- [Full example](#full-example)
+- [Config sections](#config-sections)
   - [`update_interval`](#update_interval)
   - [`prometheus`](#prometheus)
   - [`circuit_breaker`](#circuit_breaker)
@@ -18,16 +20,16 @@
   - [`metrics`](#metrics)
   - [`alerting`](#alerting)
   - [`logging`](#logging)
-- [Переменные окружения](#переменные-окружения)
-- [Валидация](#валидация)
+- [Environment variables](#environment-variables)
+- [Validation](#validation)
 - [Hot-reload](#hot-reload)
 
 ---
 
-## Полный пример
+## Full example
 
 ```yaml
-# --- Основное ---
+# --- Core ---
 update_interval: "5m"
 
 # --- Prometheus ---
@@ -60,7 +62,7 @@ rate_limit:
     - "127.0.0.1"
     - "::1"
 
-# --- Метрики ---
+# --- Metrics ---
 metrics:
   - name: "synthetic_uptime"
     prometheus_query: 'avg(synthetic_check_success{environment="production"})'
@@ -76,14 +78,14 @@ metrics:
     min_valid_value: 0.0
     max_valid_value: 1.0
 
-# --- Алерты ---
+# --- Alerts ---
 alerting:
   telegram:
     bot_token: "${TELEGRAM_BOT_TOKEN}"
     chat_id: "${TELEGRAM_CHAT_ID}"
   prometheus_unavailable_alert_threshold: 3
 
-# --- Логирование ---
+# --- Logging ---
 logging:
   level: "info"      # debug | info | warn | error
   format: "json"     # json | text
@@ -92,45 +94,45 @@ logging:
 
 ---
 
-## Секции конфига
+## Config sections
 
 ### `update_interval`
 
-Интервал между расчётами health score.
+Interval between health score calculations.
 
 ```yaml
 update_interval: "5m"
 ```
 
-Формат — строка, парсится через `time.ParseDuration`. Допустимые суффиксы: `s` (секунды), `m` (минуты), `h` (часы).
+Format is a string, parsed via `time.ParseDuration`. Valid suffixes: `s` (seconds), `m` (minutes), `h` (hours).
 
-Если значение некорректное — используется `5m`.
+If the value is invalid — `5m` is used.
 
 ### `prometheus`
 
-Настройки подключения к Prometheus:
+Prometheus connection settings:
 
 ```yaml
 prometheus:
-  url: "http://prometheus:9090"     # Базовый URL Prometheus API
-  timeout: "10s"                     # Таймаут запроса к Prometheus
+  url: "http://prometheus:9090"     # Prometheus API base URL
+  timeout: "10s"                     # Prometheus request timeout
 ```
 
-Поле `url` — обязательное. Используется для формирования запросов вида `{url}/api/v1/query?query=...`.
+The `url` field is required. It is used to form requests like `{url}/api/v1/query?query=...`.
 
-Поле `timeout` — задаёт таймаут HTTP-запроса. Если не указано или некорректно — 10 секунд.
+The `timeout` field sets the HTTP request timeout. If not specified or invalid — 10 seconds.
 
 ### `circuit_breaker`
 
-Защита от каскадных сбоев. Подробнее — [Circuit Breaker](circuit-breaker.md).
+Protection against cascading failures. Details — [Circuit Breaker](circuit-breaker.md).
 
 ```yaml
 circuit_breaker:
-  max_failures: 3        # После скольких ошибок открыть цепь
-  reset_timeout: "30s"   # Через сколько попробовать снова (Half-Open)
+  max_failures: 3        # How many errors before opening the circuit
+  reset_timeout: "30s"   # How long before retrying (Half-Open)
 ```
 
-**Состояния:**
+**States:**
 
 ```
 Closed ──(max_failures errors)──→ Open ──(reset_timeout)──→ Half-Open
@@ -138,44 +140,44 @@ Closed ──(max_failures errors)──→ Open ──(reset_timeout)──→ 
   └──────────────────────(success)─────────────────────────────┘
 ```
 
-**Рекомендации:**
-- Для стабильного Prometheus: `max_failures: 5`, `reset_timeout: "60s"`
-- Для high-load: уменьшить `reset_timeout` для быстрого восстановления
+**Recommendations:**
+- For stable Prometheus: `max_failures: 5`, `reset_timeout: "60s"`
+- For high-load: decrease `reset_timeout` for faster recovery
 
 ### `graceful_degradation`
 
-Обеспечивает работу при недоступности метрик. Подробнее — [Graceful Degradation](graceful-degradation.md).
+Ensures operation when metrics are unavailable. Details — [Graceful Degradation](graceful-degradation.md).
 
 ```yaml
 graceful_degradation:
-  enable_cache: true        # Включить кэширование значений метрик
-  cache_ttl: "5m"           # Время жизни кэша
-  max_age: "10m"            # Максимальный возраст для last_known fallback
+  enable_cache: true        # Enable metric value caching
+  cache_ttl: "5m"           # Cache TTL
+  max_age: "10m"            # Maximum age for last_known fallback
   fallback_strategy: "neutral"  # zero | average | last_known | neutral
 ```
 
-**Стратегии fallback:**
+**Fallback strategies:**
 
-| Стратегия | Возвращает | Когда использовать |
-|-----------|------------|-------------------|
-| `zero` | `0.0` | Критичные метрики — 0 = проблема |
-| `neutral` | `0.5` | Универсальный вариант |
-| `average` | Средняя точка диапазона | Метрики с известным нормальным диапазоном |
-| `last_known` | Последнее кэшированное значение | Максимальное сохранение данных |
+| Strategy | Returns | When to use |
+|----------|---------|-------------|
+| `zero` | `0.0` | Critical metrics — 0 = problem |
+| `neutral` | `0.5` | Universal option |
+| `average` | Midpoint of range | Metrics with known normal range |
+| `last_known` | Last cached value | Maximum data preservation |
 
-**Фактор деградации:**
+**Degradation factor:**
 
-Когда часть метрик использует fallback, итоговый score умножается на коэффициент:
+When some metrics use fallback, the final score is multiplied by a coefficient:
 
 ```
 degradation_factor = 1.0 - (degraded_metrics / total_metrics × 0.3)
 ```
 
-Максимальное снижение — 30% (когда все метрики в fallback).
+Maximum reduction — 30% (when all metrics are in fallback).
 
 ### `rate_limit`
 
-Защита от перегрузок. Подробнее — [Rate Limiting](rate-limiting.md).
+Protection against overloads. Details — [Rate Limiting](rate-limiting.md).
 
 ```yaml
 rate_limit:
@@ -188,72 +190,72 @@ rate_limit:
     - "127.0.0.1"
 ```
 
-**Формат rate:** `{число}/{период}`, где период — `s` (секунда), `m` (минута), `h` (час).
+**Rate format:** `{number}/{period}`, where period is `s` (second), `m` (minute), `h` (hour).
 
-Примеры: `10/s`, `100/m`, `5/h`.
+Examples: `10/s`, `100/m`, `5/h`.
 
-**Порядок проверки:**
-1. Проверка whitelist — если IP в списке, пропускаем
-2. Per-IP rate limit — проверяем индивидуальный лимит
-3. Global rate limit — проверяем общий лимит
+**Check order:**
+1. Whitelist check — if IP is in the list, skip
+2. Per-IP rate limit — check individual limit
+3. Global rate limit — check overall limit
 
-Если `rate_limit` не указан или `enabled: false` — лимитирование отключено.
+If `rate_limit` is not specified or `enabled: false` — rate limiting is disabled.
 
 ### `metrics`
 
-Список метрик для расчёта health score. **Сумма weight всех метрик должна быть 1.0** (проверяется при загрузке конфига).
+List of metrics for health score calculation. **The sum of all metric weights must be 1.0** (checked on config load).
 
 ```yaml
 metrics:
-  - name: "synthetic_uptime"           # Уникальное имя метрики
-    prometheus_query: 'avg(up)'        # PromQL запрос
-    weight: 0.4                        # Вес в итоговом score (0.0 – 1.0)
-    description: "Описание"            # Необязательное описание
-    min_valid_value: 0.0               # Минимальное допустимое значение
-    max_valid_value: 1.0               # Максимальное допустимое значение
+  - name: "synthetic_uptime"           # Unique metric name
+    prometheus_query: 'avg(up)'        # PromQL query
+    weight: 0.4                        # Weight in final score (0.0 – 1.0)
+    description: "Description"         # Optional description
+    min_valid_value: 0.0               # Minimum valid value
+    max_valid_value: 1.0               # Maximum valid value
 ```
 
-**Расчёт health score:**
+**Health score calculation:**
 
-Для каждой метрики:
-1. Выполняется PromQL-запрос к Prometheus
-2. Полученное значение нормализуется в диапазон `[0, 1]`
-3. Умножается на `weight`
-4. Все взвешенные значения суммируются
+For each metric:
+1. A PromQL query is executed against Prometheus
+2. The obtained value is normalized to the `[0, 1]` range
+3. Multiplied by `weight`
+4. All weighted values are summed
 
-**Нормализация:**
+**Normalization:**
 
 ```
 normalized = (value - min_valid_value) / (max_valid_value - min_valid_value)
 ```
 
-Если значение меньше `min_valid_value` → `0.0`
-Если значение больше `max_valid_value` → `1.0`
+If value is less than `min_valid_value` → `0.0`
+If value is greater than `max_valid_value` → `1.0`
 
-**Пример:** метрика `api_success_rate` с диапазоном `0.0 – 1.0` и `weight: 0.6`.
-Если запрос вернул `0.95`, то вклад в score: `0.95 × 0.6 = 0.57`.
+**Example:** metric `api_success_rate` with range `0.0 – 1.0` and `weight: 0.6`.
+If the query returned `0.95`, contribution to score: `0.95 × 0.6 = 0.57`.
 
 ### `alerting`
 
-Настройки алертов в Telegram.
+Telegram alert settings.
 
 ```yaml
 alerting:
   telegram:
-    bot_token: "${TELEGRAM_BOT_TOKEN}"    # Токен бота (или переменная окружения)
-    chat_id: "${TELEGRAM_CHAT_ID}"        # ID чата (или переменная окружения)
-  prometheus_unavailable_alert_threshold: 3  # Сколько циклов подряд Prometheus недоступен
+    bot_token: "${TELEGRAM_BOT_TOKEN}"    # Bot token (or environment variable)
+    chat_id: "${TELEGRAM_CHAT_ID}"        # Chat ID (or environment variable)
+  prometheus_unavailable_alert_threshold: 3  # How many consecutive cycles Prometheus is unavailable
 ```
 
-Алерт отправляется, когда количество последовательных неудачных запросов к Prometheus превышает `prometheus_unavailable_alert_threshold`.
+An alert is sent when the number of consecutive failed requests to Prometheus exceeds `prometheus_unavailable_alert_threshold`.
 
-Если `bot_token` или `chat_id` не указаны — алерты пишутся в лог (WARN).
+If `bot_token` or `chat_id` are not specified — alerts are written to the log (WARN).
 
-**Создание бота:**
-1. Написать [@BotFather](https://t.me/BotFather) в Telegram
-2. Отправить `/newbot` и следовать инструкциям
-3. Получить токен вида `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`
-4. Добавить бота в группу и узнать `chat_id` (можно через `@getidsbot`)
+**Creating a bot:**
+1. Message [@BotFather](https://t.me/BotFather) in Telegram
+2. Send `/newbot` and follow the instructions
+3. Get a token like `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`
+4. Add the bot to a group and find out `chat_id` (can use `@getidsbot`)
 
 ### `logging`
 
@@ -263,17 +265,17 @@ logging:
   format: "json"    # json | text
   service: "health-calculator"
   output: "stdout"  # stdout | stderr | file
-  output_file: "/var/log/health-calc.log"  # только если output: file
+  output_file: "/var/log/health-calc.log"  # only if output: file
 ```
 
-Формат `json` — для production (легко парсить через Loki/ELK).
-Формат `text` — для локальной разработки (читаемый вывод в консоль).
+`json` format — for production (easily parsed by Loki/ELK).
+`text` format — for local development (human-readable console output).
 
 ---
 
-## Переменные окружения
+## Environment variables
 
-В конфиге можно использовать переменные окружения через синтаксис `${VAR_NAME}`:
+Environment variables can be used in config via `${VAR_NAME}` syntax:
 
 ```yaml
 telegram:
@@ -281,39 +283,39 @@ telegram:
   chat_id: "${TELEGRAM_CHAT_ID}"
 ```
 
-При загрузке конфига `${TELEGRAM_BOT_TOKEN}` заменяется на значение переменной окружения. Если переменная не задана — подставляется пустая строка.
+When loading the config, `${TELEGRAM_BOT_TOKEN}` is replaced with the environment variable value. If the variable is not set — an empty string is substituted.
 
 ---
 
-## Валидация
+## Validation
 
-При загрузке конфига проверяется:
+When loading the config, the following is checked:
 
-1. **YAML синтаксис** — если файл некорректный, возвращается ошибка
-2. **Сумма весов** — `sum(weight)` должна быть `1.0` (погрешность `±0.001`)
-3. **Формат времени** — `cache_ttl`, `max_age`, `reset_timeout` и т.д. должны быть валидными duration
-4. **Fallback стратегия** — только `zero`, `average`, `last_known`, `neutral`
-5. **Rate limit формат** — `число/период`
+1. **YAML syntax** — if the file is invalid, an error is returned
+2. **Sum of weights** — `sum(weight)` must be `1.0` (tolerance `±0.001`)
+3. **Time format** — `cache_ttl`, `max_age`, `reset_timeout` etc. must be valid durations
+4. **Fallback strategy** — only `zero`, `average`, `last_known`, `neutral`
+5. **Rate limit format** — `number/period`
 
-Если валидация не пройдена — сервис не применяет новый конфиг и продолжает работать со старым.
+If validation fails — the service does not apply the new config and continues working with the old one.
 
 ---
 
 ## Hot-reload
 
-Конфиг перечитывается каждую минуту в фоновой горутине (`watchConfig`):
+The config is re-read every minute in a background goroutine (`watchConfig`):
 
 ```
 main goroutine:    Start() → loadConfig() → ticker loop → calculateHealthScore()
 watchConfig:       every 1 minute → loadConfig() → swap config under mutex
 ```
 
-Логирование при hot-reload:
-- Успех: `Config loaded successfully: 4 metrics, update interval: 5m0s`
-- Ошибка: `Errorf("Failed to reload config: %v", err)`
+Logging during hot-reload:
+- Success: `Config loaded successfully: 4 metrics, update interval: 5m0s`
+- Error: `Errorf("Failed to reload config: %v", err)`
 
 ---
 
-| Назад | Дальше |
-|-------|--------|
-| [Установка](02-installation.md) | [Запуск и API](04-usage.md) |
+| Previous | Next |
+|----------|------|
+| [Installation](02-installation.md) | [Usage and API](04-usage.md) |

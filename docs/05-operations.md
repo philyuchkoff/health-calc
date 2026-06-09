@@ -1,19 +1,21 @@
-# Production-эксплуатация
+> [Русская версия](ru/05-operations.md)
 
-## Содержание
+# Production Operations
+
+## Table of Contents
 
 - [Kubernetes deployment](#kubernetes-deployment)
   - [Deployment manifest](#deployment-manifest)
   - [Secrets](#secrets)
   - [Probes](#probes)
-- [Мониторинг](#мониторинг)
+- [Monitoring](#monitoring)
   - [Prometheus rules](#prometheus-rules)
   - [Grafana dashboard](#grafana-dashboard)
-- [Типовые сценарии](#типовые-сценарии)
-  - [Prometheus недоступен](#prometheus-недоступен)
-  - [Частичная деградация метрик](#частичная-деградация-метрик)
-  - [Перезагрузка конфига](#перезагрузка-конфига)
-  - [Роллбэк](#роллбэк)
+- [Common scenarios](#common-scenarios)
+  - [Prometheus is unreachable](#prometheus-is-unreachable)
+  - [Partial metric degradation](#partial-metric-degradation)
+  - [Config reload](#config-reload)
+  - [Rollback](#rollback)
 - [Capacity planning](#capacity-planning)
 - [Security](#security)
 
@@ -100,7 +102,7 @@ spec:
 
 ### Secrets
 
-Telegram credentials хранятся в Kubernetes Secrets:
+Telegram credentials are stored in Kubernetes Secrets:
 
 ```bash
 kubectl create secret generic telegram-secrets \
@@ -110,23 +112,23 @@ kubectl create secret generic telegram-secrets \
 
 ### Probes
 
-| Probe | Path | `initialDelaySeconds` | `periodSeconds` | Когда возвращает failure |
+| Probe | Path | `initialDelaySeconds` | `periodSeconds` | When it returns failure |
 |-------|------|-----------------------|-----------------|--------------------------|
-| Liveness | `/health` | 30 | 10 | Если расчёта не было > 10 минут |
-| Readiness | `/ready` | 5 | 5 | Пока не выполнен первый расчёт |
+| Liveness | `/health` | 30 | 10 | If no calculation has been performed for > 10 minutes |
+| Readiness | `/ready` | 5 | 5 | Until the first calculation is complete |
 
-**Важно:** Readiness probe имеет меньший `initialDelaySeconds`, чем Liveness. Это гарантирует, что под не получит трафик, пока не будет готов. Liveness probe начинает проверяться позже, чтобы дать время на первый расчёт метрик.
+**Important:** Readiness probe has a smaller `initialDelaySeconds` than Liveness. This ensures the pod does not receive traffic until it is ready. Liveness probe starts checking later to allow time for the first metric calculation.
 
 ### ConfigMap
 
-Конфигурация хранится в ConfigMap:
+Configuration is stored in a ConfigMap:
 
 ```bash
 kubectl create configmap health-calc-config \
   --from-file=health-config.yaml
 ```
 
-При изменении ConfigMap нужно перезапустить поды (rolling restart):
+When the ConfigMap changes, pods need to be restarted (rolling restart):
 
 ```bash
 kubectl rollout restart deployment/health-calculator
@@ -134,11 +136,11 @@ kubectl rollout restart deployment/health-calculator
 
 ---
 
-## Мониторинг
+## Monitoring
 
 ### Prometheus rules
 
-Рекомендуемый набор алертов для самого health-calculator:
+Recommended set of alerts for the health-calculator itself:
 
 ```yaml
 groups:
@@ -205,100 +207,100 @@ groups:
 
 ### Grafana dashboard
 
-Основные переменные дашборда:
+Main dashboard variables:
 
 - `${service}` — `health-calculator`
 - `${interval}` — `5m`
 
-Панели для дашборда:
+Dashboard panels:
 
 **Row 1: Overview**
-- `platform_health_score` — singlestat (текущее значение) + graph (7 дней)
+- `platform_health_score` — singlestat (current value) + graph (7 days)
 - `health_calculator_degraded_mode` — states timeline
 
 **Row 2: Performance**
-- `rate(health_calculator_calculation_duration_seconds_sum[5m]) / rate(health_calculator_calculation_duration_seconds_count[5m])` — среднее время расчёта
-- `health_calculator_metrics_fetched_total - health_calculator_metrics_failed_total` — успешные vs неудачные
+- `rate(health_calculator_calculation_duration_seconds_sum[5m]) / rate(health_calculator_calculation_duration_seconds_count[5m])` — average calculation time
+- `health_calculator_metrics_fetched_total - health_calculator_metrics_failed_total` — successful vs failed
 
 **Row 3: Resilience**
-- `health_calculator_circuit_breaker_tripped_total` — сколько раз CB открывался
-- `health_calculator_fallback_used_total` — fallback счётчик
+- `health_calculator_circuit_breaker_tripped_total` — how many times CB tripped
+- `health_calculator_fallback_used_total` — fallback counter
 
 **Row 4: Rate Limiting**
-- `rate(health_calculator_rate_limit_exceeded_total[5m])` — RPS заблокированных
-- `health_calculator_active_rate_limit_clients` — активных клиентов
+- `rate(health_calculator_rate_limit_exceeded_total[5m])` — blocked RPS
+- `health_calculator_active_rate_limit_clients` — active clients
 
 **Row 5: Service Health**
-- `service_uptime_seconds` — аптайм
-- `rate(health_calculator_prometheus_connection_errors_total[5m])` — ошибки соединения
+- `service_uptime_seconds` — uptime
+- `rate(health_calculator_prometheus_connection_errors_total[5m])` — connection errors
 
 ---
 
-## Типовые сценарии
+## Common scenarios
 
-### Prometheus недоступен
+### Prometheus is unreachable
 
-**Что происходит:**
-1. Запросы к Prometheus начинают падать с ошибкой
-2. Circuit breaker считает ошибки
-3. После `max_failures` (по умолчанию 3) CB открывается
-4. Метрики начинают использовать fallback-значения
-5. Сервис переходит в degraded-режим
-6. Если `prometheus_unavailable_alert_threshold` превышен — отправляется Telegram-алерт
-7. После восстановления Prometheus CB переходит в Half-Open, проверяет, и закрывается
+**What happens:**
+1. Requests to Prometheus start failing with errors
+2. Circuit breaker counts the errors
+3. After `max_failures` (default 3) the CB opens
+4. Metrics start using fallback values
+5. The service enters degraded mode
+6. If `prometheus_unavailable_alert_threshold` is exceeded — a Telegram alert is sent
+7. After Prometheus recovers, the CB transitions to Half-Open, verifies, and closes
 
-**Как отличить временный сбой от отказа:**
-- Временный сбой: `metrics_failed` растёт, `fallback_used_total` не растёт (CB ещё закрыт)
-- Отказ: `circuit_breaker_tripped_total` увеличился, `degraded_mode = 1`
+**How to distinguish a temporary outage from a failure:**
+- Temporary outage: `metrics_failed` grows, `fallback_used_total` does not grow (CB is still closed)
+- Failure: `circuit_breaker_tripped_total` increased, `degraded_mode = 1`
 
-**Что делать:**
-1. Проверить доступность Prometheus: `curl http://prometheus:9090/-/healthy`
-2. Проверить логи: `kubectl logs -l app=health-calculator | grep prometheus`
-3. Если Prometheus перезапускается — дождаться восстановления
-4. Если проблема на сетевом уровне — проверить NetworkPolicy / DNS
+**What to do:**
+1. Check Prometheus availability: `curl http://prometheus:9090/-/healthy`
+2. Check logs: `kubectl logs -l app=health-calculator | grep prometheus`
+3. If Prometheus is restarting — wait for recovery
+4. If the issue is at the network level — check NetworkPolicy / DNS
 
-### Частичная деградация метрик
+### Partial metric degradation
 
-**Сценарий:** 2 из 4 метрик недоступны
+**Scenario:** 2 out of 4 metrics are unavailable
 
 ```
 degradation_factor = 1.0 - (2/4 * 0.3) = 0.85
 ```
 
-Итоговый score умножается на `0.85`. Сервис продолжает работать.
+The final score is multiplied by `0.85`. The service continues to operate.
 
-**Когда это нормально:**
-- Единичные метрики временно недоступны
-- Score остаётся в пределах SLO
+**When this is normal:**
+- Individual metrics are temporarily unavailable
+- Score remains within SLO
 
-**Когда нужна реакция:**
-- `degraded_mode = 1` более 10 минут
-- Более 50% метрик в fallback
-- Score упал ниже SLO
+**When action is needed:**
+- `degraded_mode = 1` for more than 10 minutes
+- More than 50% of metrics are in fallback
+- Score has dropped below SLO
 
-### Перезагрузка конфига
+### Config reload
 
-Конфиг перечитывается каждую минуту. При изменении:
+The config is re-read every minute. Upon change:
 
-1. Читается файл `health-config.yaml`
-2. Парсится YAML
-3. Валидируется (веса метрик, формат времени, стратегии)
-4. Под блокировкой `mutex` обновляются: `config`, `circuit_breaker`, `logger`, `rate_limiter`
-5. Логируется успех или ошибка
+1. The file `health-config.yaml` is read
+2. YAML is parsed
+3. Validated (metric weights, time format, strategies)
+4. Under `mutex` lock, the following are updated: `config`, `circuit_breaker`, `logger`, `rate_limiter`
+5. Success or error is logged
 
-Если новый конфиг некорректен — сервис продолжает работать со старым.
+If the new config is invalid — the service continues working with the old one.
 
-### Роллбэк
+### Rollback
 
 ```bash
-# Kubernetes — откатить deployment
+# Kubernetes — rollback the deployment
 kubectl rollout undo deployment/health-calculator
 
-# Docker — запустить предыдущий образ
+# Docker — run the previous image
 docker run -d --name health-calculator-old \
   your-registry/health-calculator:previous-tag
 
-# Локально — запустить предыдущий бинарник
+# Locally — run the previous binary
 ./health-calculator.bak
 ```
 
@@ -308,32 +310,32 @@ docker run -d --name health-calculator-old \
 
 **Resource usage (reference):**
 
-| Метрика | Значение |
-|---------|----------|
+| Metric | Value |
+|--------|-------|
 | CPU (idle) | < 1% |
-| CPU (расчёт) | ~50ms per cycle |
-| Memory (базово) | ~10 MB |
+| CPU (calculation) | ~50ms per cycle |
+| Memory (baseline) | ~10 MB |
 | Memory (1000 rate limit buckets) | ~15 MB |
 | Startup time | < 1s |
 | Image size | ~16 MB |
 
-**Когда нужно увеличивать ресурсы:**
-- > 20 метрик в конфиге
-- > 10000 уникальных IP за минуту (rate limiting)
-- Prometheus latency > 5s (увеличить timeout)
+**When to scale up resources:**
+- > 20 metrics in config
+- > 10000 unique IPs per minute (rate limiting)
+- Prometheus latency > 5s (increase timeout)
 
 ---
 
 ## Security
 
-- Конфиг монтируется read-only в контейнер
-- Telegram credentials через Kubernetes Secrets (не в config)
-- Rate limiting защищает от DDoS
-- Timeout на все внешние HTTP-запросы
-- Circuit breaker предотвращает каскадные сбои
+- Config is mounted read-only in the container
+- Telegram credentials via Kubernetes Secrets (not in config)
+- Rate limiting protects against DDoS
+- Timeout on all external HTTP requests
+- Circuit breaker prevents cascading failures
 
 ---
 
-| Назад | Дальше |
-|-------|--------|
-| [Запуск и API](04-usage.md) | [Решение проблем](06-troubleshooting.md) |
+| Previous | Next |
+|----------|------|
+| [Startup and API](04-usage.md) | [Troubleshooting](06-troubleshooting.md) |

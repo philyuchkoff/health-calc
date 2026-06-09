@@ -1,115 +1,117 @@
+> [Русская версия](README-RU.md)
+
 # Health score calculator
 
-## Калькулятор "здоровья" сервиса или продукта
+## Service or product health calculator
 
 ![](./img/health-calc.png)
 
-## Сервис, который:
+## A service that:
 
-1. раз в 5 минут читает конфиг из Git (`health-config.yaml` с весами и правилами).
-2. через Prometheus API запрашивает сырые метрики по каждому правилу.
-3. Вычисляет общий Health Score как взвешенную сумму `(weight_synthetic * uptime_synthetic) + (weight_allure * test_pass_rate) + ....`
-4. экспортирует результат как gauge `platform_health_score` в формате Prometheus.
-5. использует in-memory кэш (значения метрик хранятся в metricValues map) на случай недоступности Prometheus.
-6. в случае недоступности источника метрик повторяет запросы три раза (ретрай с экспоненциальным бэк-оффом) и на четвертый отправляет алерт в Telegram.
-7. поддержка переменных окружения в конфиге
-8. наблюдаемость: Метрика Prometheus + логирование
+1. reads config from Git (`health-config.yaml` with weights and rules) every 5 minutes.
+2. queries raw metrics for each rule via Prometheus API.
+3. computes the overall Health Score as a weighted sum `(weight_synthetic * uptime_synthetic) + (weight_allure * test_pass_rate) + ....`
+4. exports the result as a gauge `platform_health_score` in Prometheus format.
+5. uses an in-memory cache (metric values stored in metricValues map) in case Prometheus is unavailable.
+6. retries requests three times (exponential backoff) if a metric source is unavailable, and sends a Telegram alert on the fourth failure.
+7. supports environment variables in config
+8. observability: Prometheus metrics + logging
 
-## Подробнее:
+## Details:
 
-### 1. Структуры данных:
+### 1. Data structures:
 
--  `Config` - загружает YAML конфиг с весами метрик и настройками
--  `PrometheusResponse` - для парсинга JSON ответов от Prometheus API
+-  `Config` - loads YAML config with metric weights and settings
+-  `PrometheusResponse` - for parsing JSON responses from Prometheus API
 
-### 2. Prometheus метрики:
+### 2. Prometheus metrics:
 
--  `platform_health_score` - основная метрика здоровья
--  `health_calculator_metrics_fetched_total` - счетчик успешных запросов
--  `health_calculator_metrics_failed_total` - счетчик неудачных запросов
--  `health_calculator_calculation_duration_seconds` - гистограмма времени расчетов
+-  `platform_health_score` - main health metric
+-  `health_calculator_metrics_fetched_total` - successful requests counter
+-  `health_calculator_metrics_failed_total` - failed requests counter
+-  `health_calculator_calculation_duration_seconds` - calculation time histogram
 
-### 3. Основные алгоритмы:
+### 3. Core algorithms:
 
-- ретраи: 3 попытки с exponential backoff (1s, 2s, 3s)
-- нормализация: Приведение всех метрик к диапазону 0-1
-- взвешенная сумма: `totalScore += normalizedValue * metric.Weight`
-- пропорциональная корректировка: если часть метрик недоступна
-- валидация: проверка суммы весов = 1.0
+- retries: 3 attempts with exponential backoff (1s, 2s, 3s)
+- normalization: Scale all metrics to the 0-1 range
+- weighted sum: `totalScore += normalizedValue * metric.Weight`
+- proportional adjustment: if some metrics are unavailable
+- validation: check that weights sum to 1.0
 
 ### 4. Graceful shutdown:
 
-- обработка `SIGINT`/`SIGTERM` сигналов
-- отмена контекста для остановки горутин
-- 10-секундный timeout для завершения HTTP соединений
+- `SIGINT`/`SIGTERM` signal handling
+- context cancellation to stop goroutines
+- 10-second timeout for HTTP connection cleanup
 
 ### 5. Circuit Breaker:
 
-Защищает сервис от каскадных сбоев при недоступности Prometheus:
+Protects the service from cascading failures when Prometheus is unavailable:
 
-- **Состояния:** Closed (норма), Open (блокирует запросы), Half-Open (проверяет восстановление)
-- **Настройки:** max_failures=3, reset_timeout=30s (настраивается в config)
-- **Поведение при открытии:** возвращает fallback значение 0.5 для метрик
-- **Мониторинг:** метрика `health_calculator_circuit_breaker_tripped_total`
-- **Endpoint для мониторинга:** `/circuit-breaker` - показывает текущее состояние
+- **States:** Closed (normal), Open (blocks requests), Half-Open (checks recovery)
+- **Settings:** max_failures=3, reset_timeout=30s (configurable in config)
+- **Behavior on open:** returns fallback value 0.5 for metrics
+- **Monitoring:** metric `health_calculator_circuit_breaker_tripped_total`
+- **Monitoring endpoint:** `/circuit-breaker` - shows current state
 
 ### 6. Graceful Degradation:
 
-Обеспечивает непрерывную работу при частичной недоступности метрик:
+Ensures continuous operation when metrics are partially unavailable:
 
-- **Кэширование:** TTL-based кэш успешных значений (по умолчанию 5 минут)
-- **Fallback стратегии:** zero, neutral, average, last_known (настраивается)
-- **Фактор деградации:** плавное снижение health score до 30% при проблемах
-- **Мониторинг:** метрики `health_calculator_degraded_mode` и `health_calculator_fallback_used_total`
-- **Интеграция:** работает совместно с circuit breaker
+- **Caching:** TTL-based cache of successful values (default 5 minutes)
+- **Fallback strategies:** zero, neutral, average, last_known (configurable)
+- **Degradation factor:** smooth health score reduction to 30% during issues
+- **Monitoring:** metrics `health_calculator_degraded_mode` and `health_calculator_fallback_used_total`
+- **Integration:** works together with circuit breaker
 
 ### 7. Health checks:
 
-- проверяет что расчеты выполняются регулярно (<10 минут)
-- возвращает JSON с деталями статуса
-- показывает degraded статус при использовании fallback
+- verifies calculations are running regularly (<10 minutes)
+- returns JSON with status details
+- shows degraded status when using fallback
 
 ### 8. Rate Limiting:
 
-Защищает сервис от перегрузки и злоупотреблений:
+Protects the service from overload and abuse:
 
-- **Leaky bucket алгоритм** с настраиваемыми лимитами
-- **Уровни лимитов:** глобальные и per-IP для разных endpoints
-- **Whitelist:** IP адреса без лимитов (localhost по умолчанию)
-- **Мониторинг:** метрики `health_calculator_rate_limit_exceeded_total` и `health_calculator_active_rate_limit_clients`
-- **HTTP 429:** graceful обработка превышения лимитов с JSON ошибкой
+- **Leaky bucket algorithm** with configurable limits
+- **Limit levels:** global and per-IP for different endpoints
+- **Whitelist:** IP addresses without limits (localhost by default)
+- **Monitoring:** metrics `health_calculator_rate_limit_exceeded_total` and `health_calculator_active_rate_limit_clients`
+- **HTTP 429:** graceful handling of rate limit exceeded with JSON error
 
-### 9. Безопасность:
+### 9. Security:
 
-- таймауты на HTTP запросы
-- ReadOnly монтирование конфига
-- обработка ошибок на всех уровнях
+- HTTP request timeouts
+- ReadOnly config mounting
+- error handling at all levels
 
-  
- #### Сервис будет доступен на порту 8080 с endpoints:
+   
+ #### The service will be available on port 8080 with endpoints:
 
--   `/metrics` - Prometheus метрики
--   `/health` - health check для Kubernetes (liveness probe)
--   `/ready` - readiness probe для Kubernetes
--   `/circuit-breaker` - статус circuit breaker
--   `/` - простой status page
+-   `/metrics` - Prometheus metrics
+-   `/health` - health check for Kubernetes (liveness probe)
+-   `/ready` - readiness probe for Kubernetes
+-   `/circuit-breaker` - circuit breaker status
+-   `/` - simple status page
 
-## Запуск сервиса
+## Running the service
 
-### Локально
+### Locally
 
-1. Установка зависимостей:
+1. Install dependencies:
 ```bash
 go mod download
 ```
 
-2. Редактирование конфигурационного файла:
+2. Edit configuration file:
 ```bash
 cp health-config.yaml health-config.yaml.bak
-# Отредактируйте health-config.yaml под вашу среду
+# Edit health-config.yaml for your environment
 ```
 
-3. Запуск:
+3. Run:
 ```bash
 # Dev
 go run .
@@ -119,14 +121,14 @@ go build -o health-calc
 ./health-calc
 ```
 
-### В Docker
+### In Docker
 
-1. Сборка:
+1. Build:
 ```bash
 docker build -t health-calculator .
 ```
 
-2. Запуск:
+2. Run:
 ```bash
 docker run -p 8080:8080 \
   -e TELEGRAM_BOT_TOKEN="your_token" \
@@ -136,9 +138,9 @@ docker run -p 8080:8080 \
 
 ### health-config.yaml
 
-Полный пример: [health-config.yaml](./health-config.yaml)
+Full example: [health-config.yaml](./health-config.yaml)
 
-Основные настройки:
+Main settings:
 ```yaml
 update_interval: "5m"
 
@@ -174,27 +176,27 @@ metrics:
     max_valid_value: 1.0
 ```
 
-### Проверка работы
+### Verification
 
 1. Health check:
 ```bash
 curl http://localhost:8080/health
 ```
 
-2. Получение health score:
+2. Get health score:
 ```bash
 curl http://localhost:8080/metrics | grep platform_health_score
 ```
 
-3. Статус circuit breaker:
+3. Circuit breaker status:
 ```bash
 curl http://localhost:8080/circuit-breaker
 ```
 
-## Реализовано:
+## Implemented:
 - [x] graceful shutdown
-- [x] метрики для мониторинга самого сервиса
-- [x] хелсчек с бизнес-логикой (/health + /ready)
+- [x] service self-monitoring metrics
+- [x] health check with business logic (/health + /ready)
 - [x] circuit breaker
 - [x] structured logging
 - [x] graceful degradation
