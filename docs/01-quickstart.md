@@ -9,14 +9,14 @@ Run Health Calculator in 5 minutes.
 ## 1. Download
 
 ```bash
-git clone https://github.com/your-org/health-calc.git
+git clone https://github.com/philyuchkoff/health-calc
 cd health-calc
 ```
 
 Or install via `go install` (requires Go 1.23+):
 
 ```bash
-go install github.com/your-org/health-calc@latest
+go install github.com/philyuchkoff/health-calc@latest
 ```
 
 ## 2. Configure

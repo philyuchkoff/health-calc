@@ -9,14 +9,14 @@
 ## 1. Скачать
 
 ```bash
-git clone https://github.com/your-org/health-calc.git
+git clone https://github.com/philyuchkoff/health-calc
 cd health-calc
 ```
 
 Или установить через `go install` (если есть Go 1.23+):
 
 ```bash
-go install github.com/your-org/health-calc@latest
+go install github.com/philyuchkoff/health-calc@latest
 ```
 
 ## 2. Настроить

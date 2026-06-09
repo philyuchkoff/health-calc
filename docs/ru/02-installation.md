@@ -26,7 +26,7 @@
 ## Скачивание репозитория
 
 ```bash
-git clone https://github.com/your-org/health-calc.git
+git clone https://github.com/philyuchkoff/health-calc
 cd health-calc
 ```
 
