@@ -1,0 +1,5 @@
+title: Health Calculator
+description: Weighted Health Score for services based on Prometheus metrics
+theme: jekyll-theme-cayman
+include:
+  - ru
