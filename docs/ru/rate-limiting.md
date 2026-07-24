@@ -126,7 +126,8 @@ per_ip_rate:
 
 ### 2. Ограничение health checks
 
-```yamlper_ip_rate:
+```yaml
+per_ip_rate:
   "/health": "1/m"         # 1 health check в минуту на сервис
 ```
 
