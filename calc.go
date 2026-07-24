@@ -119,6 +119,9 @@ type HealthCalculator struct {
 	prometheusConnErrors  prometheus.Counter
 	// Logging
 	logger *Logger
+	// HTTP metrics
+	httpRequestsTotal    *prometheus.CounterVec
+	httpRequestDuration  *prometheus.HistogramVec
 }
 
 // CachedValue хранит кэшированное значение метрики с метаданными
@@ -182,6 +185,23 @@ func NewHealthCalculator() *HealthCalculator {
 		Help: "Total number of config reload attempts",
 	})
 
+	httpRequestsTotal := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "Total number of HTTP requests by method, path, and status",
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	httpRequestDuration := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "Duration of HTTP requests by method and path",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1.0, 5.0},
+		},
+		[]string{"method", "path"},
+	)
+
 	serviceUptime := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "service_uptime_seconds",
 		Help: "Time since the service started",
@@ -192,7 +212,7 @@ func NewHealthCalculator() *HealthCalculator {
 		Help: "Total number of connection errors to Prometheus",
 	})
 
-	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients, configReloadTotal, serviceUptime, prometheusConnErrors)
+	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients, configReloadTotal, serviceUptime, prometheusConnErrors, httpRequestsTotal, httpRequestDuration)
 
 	// Создаем circuit breaker с настройками по умолчанию
 	// Они будут обновлены при загрузке конфига
@@ -228,6 +248,8 @@ func NewHealthCalculator() *HealthCalculator {
 		startTime:             time.Now(),
 		serviceUptime:         serviceUptime,
 		prometheusConnErrors:  prometheusConnErrors,
+		httpRequestsTotal:     httpRequestsTotal,
+		httpRequestDuration:   httpRequestDuration,
 	}
 }
 
@@ -796,6 +818,29 @@ func (hc *HealthCalculator) wrapWithRateLimit(handler http.HandlerFunc) http.Han
 	return RateLimitMiddleware(hc.rateLimiter, metrics, hc.logger, handler)
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// httpMetricsMiddleware записывает RED-метрики для HTTP запросов
+func (hc *HealthCalculator) httpMetricsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next(rec, r)
+		duration := time.Since(start).Seconds()
+		path := r.URL.Path
+		hc.httpRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rec.statusCode)).Inc()
+		hc.httpRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+	}
+}
+
 // healthHandler - HTTP handler для health checks
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
 	hc.mutex.RLock()
@@ -962,14 +1007,14 @@ func main() {
 
 	// Настраиваем HTTP сервер
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler()) // Prometheus metrics endpoint (no rate limit)
-	mux.HandleFunc("/health", calculator.recoveryMiddleware(calculator.wrapWithRateLimit(calculator.healthHandler)))
-	mux.HandleFunc("/ready", calculator.recoveryMiddleware(calculator.readyHandler))
-	mux.HandleFunc("/circuit-breaker", calculator.recoveryMiddleware(calculator.wrapWithRateLimit(calculator.circuitBreakerHandler)))
-	mux.HandleFunc("/", calculator.recoveryMiddleware(calculator.wrapWithRateLimit(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/metrics", calculator.httpMetricsMiddleware(promhttp.Handler().ServeHTTP))
+	mux.HandleFunc("/health", calculator.recoveryMiddleware(calculator.httpMetricsMiddleware(calculator.wrapWithRateLimit(calculator.healthHandler))))
+	mux.HandleFunc("/ready", calculator.recoveryMiddleware(calculator.httpMetricsMiddleware(calculator.readyHandler)))
+	mux.HandleFunc("/circuit-breaker", calculator.recoveryMiddleware(calculator.httpMetricsMiddleware(calculator.wrapWithRateLimit(calculator.circuitBreakerHandler))))
+	mux.HandleFunc("/", calculator.recoveryMiddleware(calculator.httpMetricsMiddleware(calculator.wrapWithRateLimit(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Health Calculator Service"))
-	})))
+	}))))
 
 	server := &http.Server{
 		Addr:              ":8080",
