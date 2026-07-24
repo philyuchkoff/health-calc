@@ -1,19 +1,30 @@
-# Health Model Configuration
-# Version: 1.0
-# for test
 update_interval: "5m"
 
-# Circuit breaker configuration
+prometheus:
+  url: "http://prometheus:9090"
+  timeout: "30s"
+
 circuit_breaker:
   max_failures: 3
   reset_timeout: "30s"
 
-# Graceful degradation configuration
 graceful_degradation:
   enable_cache: true
   cache_ttl: "5m"
   max_age: "10m"
-  fallback_strategy: "neutral"  # zero|average|last_known|neutral
+  fallback_strategy: "neutral"
+
+rate_limit:
+  enabled: true
+  global_rate:
+    "/metrics": "100/m"
+    "/health": "60/m"
+  per_ip_rate:
+    "/health": "10/m"
+    "/circuit-breaker": "20/m"
+  whitelist:
+    - "127.0.0.1"
+    - "::1"
 
 metrics:
   - name: "synthetic_uptime"
@@ -23,7 +34,7 @@ metrics:
     min_valid_value: 0.0
     max_valid_value: 1.0
 
-  - name: "allure_test_pass_rate" 
+  - name: "allure_test_pass_rate"
     prometheus_query: 'sum(allure_test_passed) / sum(allure_test_total)'
     weight: 0.3
     description: "Test pass rate from Allure TestOps"
@@ -50,19 +61,7 @@ alerting:
     chat_id: "${TELEGRAM_CHAT_ID}"
   prometheus_unavailable_alert_threshold: 3
 
-prometheus:
-  url: "http://prometheus:9090"
-  timeout: "30s"
-
-# Rate limiting configuration
-rate_limit:
-  enabled: true
-  global_rate:
-    "/metrics": "100/m"
-    "/health": "60/m"
-  per_ip_rate:
-    "/health": "10/m"
-    "/circuit-breaker": "20/m"
-  whitelist:
-    - "127.0.0.1"
-    - "::1"  # IPv6 localhost
+logging:
+  level: "info"
+  format: "json"
+  service: "health-calculator"
