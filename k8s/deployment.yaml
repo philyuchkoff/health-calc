@@ -37,7 +37,8 @@ spec:
             app: health-calculator
       containers:
       - name: health-calculator
-        image: your-registry/health-calculator:latest
+        image: ghcr.io/philyuchkoff/health-calculator:v0.1.0
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
         livenessProbe:
