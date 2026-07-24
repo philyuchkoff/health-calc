@@ -131,6 +131,20 @@ type CachedValue struct {
 	Expires   time.Time
 }
 
+// registerOrLog registers Prometheus collectors, ignoring AlreadyRegistered
+// errors (which happen on subsequent NewHealthCalculator calls in tests).
+// Other errors are logged but do not abort startup — a missing metric is
+// better than a crashed service.
+func registerOrLog(cs ...prometheus.Collector) {
+	for _, c := range cs {
+		if err := prometheus.Register(c); err != nil {
+			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+				fmt.Printf("prometheus register failed: %v\n", err)
+			}
+		}
+	}
+}
+
 // NewHealthCalculator создает и инициализирует новый экземпляр калькулятора
 func NewHealthCalculator() *HealthCalculator {
 	// Регистрируем Prometheus метрики
@@ -212,7 +226,7 @@ func NewHealthCalculator() *HealthCalculator {
 		Help: "Total number of connection errors to Prometheus",
 	})
 
-	prometheus.MustRegister(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients, configReloadTotal, serviceUptime, prometheusConnErrors, httpRequestsTotal, httpRequestDuration)
+	registerOrLog(healthScore, metricsFetched, metricsFailed, calculationTime, circuitBreakerTripped, degradedMode, fallbackUsed, rateLimitExceeded, activeClients, configReloadTotal, serviceUptime, prometheusConnErrors, httpRequestsTotal, httpRequestDuration)
 
 	// Создаем circuit breaker с настройками по умолчанию
 	// Они будут обновлены при загрузке конфига
