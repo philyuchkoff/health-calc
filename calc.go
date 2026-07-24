@@ -371,8 +371,8 @@ func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 }
 
 // queryPrometheus выполняет запрос к Prometheus API
-func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
-	url := fmt.Sprintf("%s/api/v1/query", hc.config.Prometheus.URL)
+func (hc *HealthCalculator) queryPrometheus(query string, promURL string, timeout time.Duration) (float64, error) {
+	url := fmt.Sprintf("%s/api/v1/query", promURL)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return 0, err
@@ -382,12 +382,6 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 	q.Add("query", query)
 	req.URL.RawQuery = q.Encode()
 
-	timeout := 10 * time.Second
-	if hc.config != nil && hc.config.Prometheus.Timeout != "" {
-		if t, err := time.ParseDuration(hc.config.Prometheus.Timeout); err == nil {
-			timeout = t
-		}
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -538,8 +532,7 @@ func (hc *HealthCalculator) cleanupExpiredCacheLocked() {
 }
 
 // queryPrometheusWithRetry выполняет запрос через circuit breaker и с ретраями
-func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName string) (float64, error) {
-	// Используем circuit breaker для защиты от каскадных сбоев
+func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName string, promURL string, timeout time.Duration, alertThreshold int, botToken string, chatID string) (float64, error) {
 	var result float64
 	var err error
 
@@ -548,12 +541,12 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 		maxRetries := 3
 
 		for i := 0; i < maxRetries; i++ {
-			value, queryErr := hc.queryPrometheus(query)
+			value, queryErr := hc.queryPrometheus(query, promURL, timeout)
 			if queryErr == nil {
 				result = value
-				hc.prometheusDownCount = 0 // Сбрасываем счетчик при успехе
+				hc.prometheusDownCount = 0
 				hc.metricsFetched.Inc()
-				return nil // Успех
+				return nil
 			}
 
 			lastErr = queryErr
@@ -568,9 +561,11 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 		err = lastErr
 
 		hc.prometheusDownCount++
-		if hc.config != nil && hc.prometheusDownCount >= hc.config.Alerting.PrometheusUnavailableThreshold {
-			hc.sendAlert(context.Background(), fmt.Sprintf("Prometheus unavailable after %d attempts. Last error: %v",
-				hc.prometheusDownCount, lastErr))
+		if hc.prometheusDownCount >= alertThreshold {
+			hc.sendAlert(context.Background(),
+				fmt.Sprintf("Prometheus unavailable after %d attempts. Last error: %v",
+					hc.prometheusDownCount, lastErr),
+				botToken, chatID)
 		}
 
 		return fmt.Errorf("all retries failed: %v", lastErr)
@@ -590,19 +585,18 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 }
 
 // sendAlert отправляет уведомление в Telegram
-func (hc *HealthCalculator) sendAlert(ctx context.Context, message string) {
+func (hc *HealthCalculator) sendAlert(ctx context.Context, message string, botToken string, chatID string) {
 	logger := hc.logger.WithContextFields(ctx, SourceAlerting)
 
-	if hc.config == nil || hc.config.Alerting.Telegram.BotToken == "" || hc.config.Alerting.Telegram.ChatID == "" {
+	if botToken == "" || chatID == "" {
 		logger.WithField("message", message).Warn("ALERT would be sent - no Telegram credentials configured")
 		return
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage",
-		hc.config.Alerting.Telegram.BotToken)
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 
 	payload := map[string]string{
-		"chat_id": hc.config.Alerting.Telegram.ChatID,
+		"chat_id": chatID,
 		"text":    message,
 	}
 
@@ -653,6 +647,23 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	// Очищаем просроченные кэши
 	hc.cleanupExpiredCacheLocked()
 
+	promURL := ""
+	timeout := 10 * time.Second
+	alertThreshold := 3
+	botToken := ""
+	chatID := ""
+	if hc.config != nil {
+		promURL = hc.config.Prometheus.URL
+		if hc.config.Prometheus.Timeout != "" {
+			if t, err := time.ParseDuration(hc.config.Prometheus.Timeout); err == nil {
+				timeout = t
+			}
+		}
+		alertThreshold = hc.config.Alerting.PrometheusUnavailableThreshold
+		botToken = hc.config.Alerting.Telegram.BotToken
+		chatID = hc.config.Alerting.Telegram.ChatID
+	}
+
 	totalScore := 0.0
 	validMetrics := 0
 	degradedMetrics := 0
@@ -679,7 +690,7 @@ func (hc *HealthCalculator) calculateHealthScore() {
 			hc.logger.WithContextFields(ctx, SourceCalculator).
 				Debugf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
 		} else {
-			value, err = hc.queryPrometheusWithRetry(metric.Query, metric.Name)
+			value, err = hc.queryPrometheusWithRetry(metric.Query, metric.Name, promURL, timeout, alertThreshold, botToken, chatID)
 
 			if err != nil {
 				hc.logger.WithContextFields(ctx, SourceCalculator).
