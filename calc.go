@@ -51,6 +51,8 @@ const (
 	FallbackStrategyNeutral = "neutral"
 )
 
+const maxPrometheusResponseSize = 10 * 1024 * 1024 // 10 MB
+
 type Metric struct {
 	Name        string  `yaml:"name"`
 	Query       string  `yaml:"prometheus_query"`
@@ -432,7 +434,7 @@ func (hc *HealthCalculator) queryPrometheus(query string, promURL string, timeou
 		return 0, fmt.Errorf("prometheus returned status: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPrometheusResponseSize))
 	if err != nil {
 		return 0, err
 	}
