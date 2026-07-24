@@ -117,8 +117,8 @@ cp health-config.yaml health-config.yaml.bak
 go run .
 
 # Prod
-go build -o health-calc
-./health-calc
+go build -o health-calculator
+./health-calculator
 ```
 
 ### В Docker

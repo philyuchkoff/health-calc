@@ -6,7 +6,7 @@ echo "=== Testing Rate Limiting ==="
 
 # Start the health calculator in background
 echo "Starting health calculator..."
-./health-calc &
+./health-calculator &
 SERVER_PID=$!
 
 # Wait for server to start
