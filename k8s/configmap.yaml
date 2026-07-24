@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: health-calc-config
+data:
+  health-config.yaml: |
+    update_interval: "5m"
+
+    prometheus:
+      url: "http://prometheus:9090"
+      timeout: "10s"
+
+    circuit_breaker:
+      max_failures: 3
+      reset_timeout: "30s"
+
+    graceful_degradation:
+      enable_cache: true
+      cache_ttl: "5m"
+      max_age: "10m"
+      fallback_strategy: "neutral"
+
+    rate_limit:
+      enabled: true
+      global_rate:
+        "/metrics": "100/m"
+        "/health": "60/m"
+      per_ip_rate:
+        "/health": "10/m"
+      whitelist:
+        - "127.0.0.1"
+
+    metrics:
+      - name: "synthetic_uptime"
+        prometheus_query: 'avg(up)'
+        weight: 1.0
+        min_valid_value: 0.0
+        max_valid_value: 1.0
+
+    alerting:
+      telegram:
+        bot_token: "${TELEGRAM_BOT_TOKEN}"
+        chat_id: "${TELEGRAM_CHAT_ID}"
+      prometheus_unavailable_alert_threshold: 3
+
+    logging:
+      level: "info"
+      format: "json"
+      service: "health-calculator"

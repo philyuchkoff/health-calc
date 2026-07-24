@@ -23,82 +23,23 @@
 
 ## Kubernetes deployment
 
-### Deployment manifest
+Ready-to-use manifests are in the [`k8s/`](../k8s/) directory:
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: health-calculator
-  labels:
-    app: health-calculator
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: health-calculator
-  template:
-    metadata:
-      labels:
-        app: health-calculator
-    spec:
-      containers:
-      - name: health-calculator
-        image: your-registry/health-calculator:latest
-        ports:
-        - containerPort: 8080
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        resources:
-          requests:
-            cpu: 100m
-            memory: 64Mi
-          limits:
-            cpu: 500m
-            memory: 128Mi
-        volumeMounts:
-        - name: config
-          mountPath: /root/health-config.yaml
-          subPath: health-config.yaml
-          readOnly: true
-        env:
-        - name: TELEGRAM_BOT_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: telegram-secrets
-              key: bot-token
-        - name: TELEGRAM_CHAT_ID
-          valueFrom:
-            secretKeyRef:
-              name: telegram-secrets
-              key: chat-id
-      volumes:
-      - name: config
-        configMap:
-          name: health-calc-config
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: health-calculator
-spec:
-  selector:
-    app: health-calculator
-  ports:
-  - protocol: TCP
-    port: 80
-    targetPort: 8080
+```bash
+kubectl apply -f k8s/
 ```
+
+### Deployment
+
+See [k8s/deployment.yaml](../k8s/deployment.yaml). Key details:
+- 2 replicas with liveness and readiness probes
+- Config mounted from ConfigMap (read-only)
+- Telegram credentials via Kubernetes Secrets
+- Resource requests: 100m CPU / 64Mi memory
+
+### Service
+
+See [k8s/service.yaml](../k8s/service.yaml). Exposes port 80 → 8080.
 
 ### Secrets
 
@@ -121,11 +62,10 @@ kubectl create secret generic telegram-secrets \
 
 ### ConfigMap
 
-Configuration is stored in a ConfigMap:
+Configuration is stored in a ConfigMap. See [k8s/configmap.yaml](../k8s/configmap.yaml):
 
 ```bash
-kubectl create configmap health-calc-config \
-  --from-file=health-config.yaml
+kubectl apply -f k8s/configmap.yaml
 ```
 
 When the ConfigMap changes, pods need to be restarted (rolling restart):

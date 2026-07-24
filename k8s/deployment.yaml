@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: health-calculator
+  labels:
+    app: health-calculator
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: health-calculator
+  template:
+    metadata:
+      labels:
+        app: health-calculator
+    spec:
+      containers:
+      - name: health-calculator
+        image: your-registry/health-calculator:latest
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 128Mi
+        volumeMounts:
+        - name: config
+          mountPath: /root/health-config.yaml
+          subPath: health-config.yaml
+          readOnly: true
+        env:
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: telegram-secrets
+              key: bot-token
+        - name: TELEGRAM_CHAT_ID
+          valueFrom:
+            secretKeyRef:
+              name: telegram-secrets
+              key: chat-id
+        - name: CONFIG_PATH
+          value: /root/health-config.yaml
+      volumes:
+      - name: config
+        configMap:
+          name: health-calc-config
