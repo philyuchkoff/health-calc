@@ -6,6 +6,10 @@
 
 ![](./img/health-calc.png)
 
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![CI](https://github.com/philyuchkoff/health-calc/actions/workflows/ci.yml/badge.svg)](https://github.com/philyuchkoff/health-calc/actions/workflows/ci.yml)
+
 ## Сервис, который:
 
 1. раз в 5 минут читает конфиг из Git (`health-config.yaml` с весами и правилами).

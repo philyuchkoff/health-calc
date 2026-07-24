@@ -6,6 +6,10 @@
 
 ![](./img/health-calc.png)
 
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![CI](https://github.com/philyuchkoff/health-calc/actions/workflows/ci.yml/badge.svg)](https://github.com/philyuchkoff/health-calc/actions/workflows/ci.yml)
+
 ## A service that:
 
 1. reads config from Git (`health-config.yaml` with weights and rules) every 5 minutes.
