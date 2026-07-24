@@ -623,7 +623,7 @@ func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64
 		return 0.0
 	}
 	if value > metric.MaxValue {
-		return metric.MaxValue
+		return 1.0
 	}
 
 	// Нормализуем к диапазону 0-1
