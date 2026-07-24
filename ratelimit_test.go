@@ -157,8 +157,8 @@ func TestBucket(t *testing.T) {
 		capacity:   5,
 		tokens:     5,
 		refillRate: 5, // 5 tokens per second
-		lastRefill: time.Now(),
 	}
+	bucket.lastRefillUnix.Store(time.Now().UnixNano())
 
 	// Use all tokens
 	for i := 0; i < 5; i++ {

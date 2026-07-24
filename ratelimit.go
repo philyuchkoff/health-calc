@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -21,11 +22,11 @@ type RateLimiter struct {
 
 // Bucket представляет leaky bucket для одного клиента
 type Bucket struct {
-	capacity   int
-	tokens     float64
-	refillRate float64
-	lastRefill time.Time
-	mutex      sync.Mutex
+	capacity       int
+	tokens         float64
+	refillRate     float64
+	lastRefillUnix atomic.Int64
+	mutex          sync.Mutex
 }
 
 // RateLimitConfig конфигурация rate limiting
@@ -85,12 +86,13 @@ func (b *Bucket) AllowNext() RateLimitDecision {
 
 	now := time.Now()
 
-	elapsed := now.Sub(b.lastRefill)
+	lastRefill := time.Unix(0, b.lastRefillUnix.Load())
+	elapsed := now.Sub(lastRefill)
 	tokensToAdd := float64(elapsed.Milliseconds()) * b.refillRate / 1000
 
 	if tokensToAdd > 0 {
 		b.tokens = min(float64(b.capacity), b.tokens+tokensToAdd)
-		b.lastRefill = now
+		b.lastRefillUnix.Store(now.UnixNano())
 	}
 
 	if b.tokens >= 1 {
@@ -135,8 +137,8 @@ func (rl *RateLimiter) GetOrCreateBucket(clientKey string, requests int, period 
 			capacity:   requests,
 			tokens:     float64(requests),
 			refillRate: float64(requests) / period.Seconds(),
-			lastRefill: time.Now(),
 		}
+		bucket.lastRefillUnix.Store(time.Now().UnixNano())
 		rl.clients[clientKey] = bucket
 	}
 
@@ -207,12 +209,11 @@ func (rl *RateLimiter) CleanupExpiredBuckets() {
 
 	now := time.Now()
 	for key, bucket := range rl.clients {
-		bucket.mutex.Lock()
+		lastRefill := time.Unix(0, bucket.lastRefillUnix.Load())
 		// Удаляем bucket'ы, не используемые более 5 минут
-		if now.Sub(bucket.lastRefill) > 5*time.Minute {
+		if now.Sub(lastRefill) > 5*time.Minute {
 			delete(rl.clients, key)
 		}
-		bucket.mutex.Unlock()
 	}
 }
 
