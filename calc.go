@@ -942,7 +942,7 @@ func (hc *HealthCalculator) readyHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": status,
 	})
 }
