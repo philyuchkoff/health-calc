@@ -22,8 +22,8 @@ type RateLimiter struct {
 // Bucket представляет leaky bucket для одного клиента
 type Bucket struct {
 	capacity     int
-	tokens       int
- refillRate   int
+	tokens       float64
+	refillRate   float64
 	lastRefill   time.Time
 	mutex        sync.Mutex
 }
@@ -78,19 +78,17 @@ func (b *Bucket) AllowNext() (bool, int) {
 
 	now := time.Now()
 
-	// Refill tokens based on time passed (millisecond precision)
 	elapsed := now.Sub(b.lastRefill)
-	tokensToAdd := int(elapsed.Milliseconds()) * b.refillRate / 1000
+	tokensToAdd := float64(elapsed.Milliseconds()) * b.refillRate / 1000
 
 	if tokensToAdd > 0 {
-		b.tokens = min(b.capacity, b.tokens+tokensToAdd)
+		b.tokens = min(float64(b.capacity), b.tokens+tokensToAdd)
 		b.lastRefill = now
 	}
 
-	// Check if we have enough tokens
-	if b.tokens > 0 {
+	if b.tokens >= 1 {
 		b.tokens--
-		return true, b.tokens
+		return true, int(b.tokens)
 	}
 
 	return false, 0
@@ -110,8 +108,8 @@ func (rl *RateLimiter) GetOrCreateBucket(clientKey string, requests int, period 
 	if !exists {
 		bucket = &Bucket{
 			capacity:   requests,
-			tokens:     requests,
-			refillRate: int(float64(requests) / period.Seconds()),
+			tokens:     float64(requests),
+			refillRate: float64(requests) / period.Seconds(),
 			lastRefill: time.Now(),
 		}
 		rl.clients[clientKey] = bucket
@@ -288,11 +286,4 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 type RateLimitMetrics struct {
 	rateLimitExceeded prometheus.Counter
 	activeClients     prometheus.Gauge
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

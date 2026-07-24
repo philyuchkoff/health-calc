@@ -438,7 +438,10 @@ func (hc *HealthCalculator) queryPrometheus(query string) (float64, error) {
 func (hc *HealthCalculator) cacheValue(metricName string, value float64, ttl time.Duration) {
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
+	hc.cacheValueLocked(metricName, value, ttl)
+}
 
+func (hc *HealthCalculator) cacheValueLocked(metricName string, value float64, ttl time.Duration) {
 	hc.cachedValues[metricName] = &CachedValue{
 		Value:     value,
 		Timestamp: time.Now(),
@@ -450,13 +453,15 @@ func (hc *HealthCalculator) cacheValue(metricName string, value float64, ttl tim
 func (hc *HealthCalculator) getCachedValue(metricName string) (float64, bool) {
 	hc.mutex.RLock()
 	defer hc.mutex.RUnlock()
+	return hc.getCachedValueLocked(metricName)
+}
 
+func (hc *HealthCalculator) getCachedValueLocked(metricName string) (float64, bool) {
 	cached, exists := hc.cachedValues[metricName]
 	if !exists {
 		return 0, false
 	}
 
-	// Проверяем TTL
 	if time.Now().After(cached.Expires) {
 		return 0, false
 	}
@@ -468,7 +473,10 @@ func (hc *HealthCalculator) getCachedValue(metricName string) (float64, bool) {
 func (hc *HealthCalculator) getFallbackValue(metricName string, metric Metric) float64 {
 	hc.mutex.RLock()
 	defer hc.mutex.RUnlock()
+	return hc.getFallbackValueLocked(metricName, metric)
+}
 
+func (hc *HealthCalculator) getFallbackValueLocked(metricName string, metric Metric) float64 {
 	if hc.fallbackUsed != nil {
 		hc.fallbackUsed.Inc()
 	}
@@ -488,7 +496,7 @@ func (hc *HealthCalculator) getFallbackValue(metricName string, metric Metric) f
 			Warnf("Using neutral fallback (0.5) for metric %s", metricName)
 		return 0.5
 	case FallbackStrategyLast:
-		if cachedValue, exists := hc.getCachedValue(metricName); exists {
+		if cachedValue, exists := hc.getCachedValueLocked(metricName); exists {
 			logger.WithContextFields(context.Background(), SourceCalculator).
 				Warnf("Using last known value %.4f for metric %s", cachedValue, metricName)
 			return cachedValue
@@ -516,7 +524,10 @@ func (hc *HealthCalculator) getFallbackValue(metricName string, metric Metric) f
 func (hc *HealthCalculator) cleanupExpiredCache() {
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
+	hc.cleanupExpiredCacheLocked()
+}
 
+func (hc *HealthCalculator) cleanupExpiredCacheLocked() {
 	now := time.Now()
 	maxAge := hc.maxAgeDuration
 	for name, cached := range hc.cachedValues {
@@ -640,7 +651,7 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	defer hc.mutex.Unlock()
 
 	// Очищаем просроченные кэши
-	hc.cleanupExpiredCache()
+	hc.cleanupExpiredCacheLocked()
 
 	totalScore := 0.0
 	validMetrics := 0
@@ -663,7 +674,7 @@ func (hc *HealthCalculator) calculateHealthScore() {
 		var err error
 		var usedFallback bool
 
-		if cachedValue, exists := hc.getCachedValue(metric.Name); exists && hc.config.GracefulDeg.EnableCache {
+		if cachedValue, exists := hc.getCachedValueLocked(metric.Name); exists && hc.config.GracefulDeg.EnableCache {
 			value = cachedValue
 			hc.logger.WithContextFields(ctx, SourceCalculator).
 				Debugf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
@@ -673,12 +684,12 @@ func (hc *HealthCalculator) calculateHealthScore() {
 			if err != nil {
 				hc.logger.WithContextFields(ctx, SourceCalculator).
 					Warnf("Failed to get metric %s, using fallback: %v", metric.Name, err)
-				value = hc.getFallbackValue(metric.Name, metric)
+				value = hc.getFallbackValueLocked(metric.Name, metric)
 				usedFallback = true
 				degradedMetrics++
 			} else {
 				if hc.config.GracefulDeg.EnableCache {
-					hc.cacheValue(metric.Name, value, cacheTTL)
+					hc.cacheValueLocked(metric.Name, value, cacheTTL)
 				}
 			}
 		}
