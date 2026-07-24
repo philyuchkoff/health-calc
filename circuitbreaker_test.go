@@ -63,9 +63,9 @@ func TestCircuitBreaker(t *testing.T) {
 	}
 
 	// Reset the circuit breaker
-	cb.Execute(failFunc)
-	cb.Execute(failFunc)
-	cb.Execute(failFunc)
+	_ = cb.Execute(failFunc)
+	_ = cb.Execute(failFunc)
+	_ = cb.Execute(failFunc)
 	if cb.State() != StateOpen {
 		t.Error("Expected circuit breaker to be Open before reset")
 	}
@@ -96,8 +96,8 @@ func TestCircuitBreakerStateChangeCallback(t *testing.T) {
 		return errors.New("test error")
 	}
 
-	cb.Execute(failFunc)
-	cb.Execute(failFunc) // This should trip it
+	_ = cb.Execute(failFunc)
+	_ = cb.Execute(failFunc) // This should trip it
 
 	// Wait a bit for async callback
 	time.Sleep(10 * time.Millisecond)

@@ -297,7 +297,7 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 				"message":  "Too many requests. Please try again later.",
 				"endpoint": endpoint,
 			}
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 

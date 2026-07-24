@@ -791,7 +791,7 @@ func (hc *HealthCalculator) circuitBreakerHandler(w http.ResponseWriter, r *http
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // recoveryMiddleware восстанавливает панику в HTTP handler и логирует её
@@ -909,7 +909,7 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // readyHandler - HTTP handler для Kubernetes readiness probe
@@ -925,7 +925,7 @@ func (hc *HealthCalculator) readyHandler(w http.ResponseWriter, r *http.Request)
 
 	if !configLoaded || !hasCalculation {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "not_ready",
 			"reason": "service has not completed initial startup",
 		})
@@ -1038,7 +1038,7 @@ func main() {
 	mux.HandleFunc("/circuit-breaker", calculator.recoveryMiddleware(calculator.httpMetricsMiddleware(calculator.wrapWithRateLimit(calculator.circuitBreakerHandler))))
 	mux.HandleFunc("/", calculator.recoveryMiddleware(calculator.httpMetricsMiddleware(calculator.wrapWithRateLimit(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Health Calculator Service"))
+		_, _ = w.Write([]byte("Health Calculator Service"))
 	}))))
 
 	server := &http.Server{
