@@ -14,6 +14,11 @@ spec:
       labels:
         app: health-calculator
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
       - name: health-calculator
         image: your-registry/health-calculator:latest
@@ -38,11 +43,21 @@ spec:
           limits:
             cpu: 500m
             memory: 128Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
         volumeMounts:
         - name: config
           mountPath: /root/health-config.yaml
           subPath: health-config.yaml
           readOnly: true
+        - name: tmp
+          mountPath: /tmp
         env:
         - name: TELEGRAM_BOT_TOKEN
           valueFrom:
@@ -60,3 +75,5 @@ spec:
       - name: config
         configMap:
           name: health-calc-config
+      - name: tmp
+        emptyDir: {}
