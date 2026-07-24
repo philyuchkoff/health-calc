@@ -107,47 +107,47 @@ func TestRateLimiter(t *testing.T) {
 	req2.RemoteAddr = "192.168.1.2:12345"
 
 	// First request from each IP should be allowed
-	allowed, limit, remaining := rl.IsAllowed(req1, "/test")
-	if !allowed {
+	decision := rl.IsAllowed(req1, "/test")
+	if !decision.Allowed {
 		t.Error("First request from IP1 should be allowed")
 	}
-	if limit != 2 {
-		t.Errorf("Expected limit 2, got %d", limit)
+	if decision.Limit != 2 {
+		t.Errorf("Expected limit 2, got %d", decision.Limit)
 	}
-	if remaining != 1 {
-		t.Errorf("Expected 1 remaining, got %d", remaining)
+	if decision.Remaining != 1 {
+		t.Errorf("Expected 1 remaining, got %d", decision.Remaining)
 	}
-	allowed, _, _ = rl.IsAllowed(req2, "/test")
-	if !allowed {
+	decision = rl.IsAllowed(req2, "/test")
+	if !decision.Allowed {
 		t.Error("First request from IP2 should be allowed")
 	}
 
 	// Second requests should be allowed
-	allowed, _, remaining = rl.IsAllowed(req1, "/test")
-	if !allowed {
+	decision = rl.IsAllowed(req1, "/test")
+	if !decision.Allowed {
 		t.Error("Second request from IP1 should be allowed")
 	}
-	if remaining != 0 {
-		t.Errorf("Expected 0 remaining, got %d", remaining)
+	if decision.Remaining != 0 {
+		t.Errorf("Expected 0 remaining, got %d", decision.Remaining)
 	}
-	allowed, _, _ = rl.IsAllowed(req2, "/test")
-	if !allowed {
+	decision = rl.IsAllowed(req2, "/test")
+	if !decision.Allowed {
 		t.Error("Second request from IP2 should be allowed")
 	}
 
 	// Third requests should be denied
-	allowed, limit, remaining = rl.IsAllowed(req1, "/test")
-	if allowed {
+	decision = rl.IsAllowed(req1, "/test")
+	if decision.Allowed {
 		t.Error("Third request from IP1 should be denied")
 	}
-	if limit != 2 {
-		t.Errorf("Expected limit 2, got %d", limit)
+	if decision.Limit != 2 {
+		t.Errorf("Expected limit 2, got %d", decision.Limit)
 	}
-	if remaining != 0 {
-		t.Errorf("Expected 0 remaining, got %d", remaining)
+	if decision.Remaining != 0 {
+		t.Errorf("Expected 0 remaining, got %d", decision.Remaining)
 	}
-	allowed, _, _ = rl.IsAllowed(req2, "/test")
-	if allowed {
+	decision = rl.IsAllowed(req2, "/test")
+	if decision.Allowed {
 		t.Error("Third request from IP2 should be denied")
 	}
 }
@@ -162,15 +162,15 @@ func TestBucket(t *testing.T) {
 
 	// Use all tokens
 	for i := 0; i < 5; i++ {
-		allowed, _ := bucket.AllowNext()
-		if !allowed {
+		decision := bucket.AllowNext()
+		if !decision.Allowed {
 			t.Errorf("Request %d should be allowed", i+1)
 		}
 	}
 
 	// Next should be denied
-	allowed, _ := bucket.AllowNext()
-	if allowed {
+	decision := bucket.AllowNext()
+	if decision.Allowed {
 		t.Error("Request should be denied when no tokens")
 	}
 
@@ -178,8 +178,8 @@ func TestBucket(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	// Should be allowed again
-	allowed, _ = bucket.AllowNext()
-	if !allowed {
+	decision = bucket.AllowNext()
+	if !decision.Allowed {
 		t.Error("Request should be allowed after refill")
 	}
 }
@@ -200,8 +200,8 @@ func TestRateLimiterWhitelist(t *testing.T) {
 	req.RemoteAddr = "192.168.1.100:12345"
 
 	for i := 0; i < 10; i++ {
-		allowed, _, _ := rl.IsAllowed(req, "/test")
-		if !allowed {
+		decision := rl.IsAllowed(req, "/test")
+		if !decision.Allowed {
 			t.Errorf("Whitelisted IP request %d should always be allowed", i+1)
 		}
 	}
@@ -211,14 +211,14 @@ func TestRateLimiterWhitelist(t *testing.T) {
 	req2.RemoteAddr = "192.168.1.200:12345"
 
 	// First should be allowed
-	allowed, _, _ := rl.IsAllowed(req2, "/test")
-	if !allowed {
+	decision := rl.IsAllowed(req2, "/test")
+	if !decision.Allowed {
 		t.Error("First request from non-whitelisted IP should be allowed")
 	}
 
 	// Second should be denied
-	allowed, _, _ = rl.IsAllowed(req2, "/test")
-	if allowed {
+	decision = rl.IsAllowed(req2, "/test")
+	if decision.Allowed {
 		t.Error("Second request from non-whitelisted IP should be denied")
 	}
 }

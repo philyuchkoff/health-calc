@@ -71,8 +71,16 @@ func ParseRate(rateStr string) (requests int, period time.Duration, err error) {
 	return requests, period, nil
 }
 
+// RateLimitDecision описывает результат проверки rate limiter
+type RateLimitDecision struct {
+	Allowed    bool
+	Limit      int
+	Remaining  int
+	ResetAfter time.Duration
+}
+
 // AllowNext проверяет, разрешен ли следующий запрос
-func (b *Bucket) AllowNext() (bool, int) {
+func (b *Bucket) AllowNext() RateLimitDecision {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
@@ -88,10 +96,28 @@ func (b *Bucket) AllowNext() (bool, int) {
 
 	if b.tokens >= 1 {
 		b.tokens--
-		return true, int(b.tokens)
+		tokensNeeded := 1.0 - b.tokens
+		if tokensNeeded < 0 {
+			tokensNeeded = 0
+		}
+		resetAfter := time.Duration(tokensNeeded / b.refillRate * float64(time.Second))
+		return RateLimitDecision{
+			Allowed:    true,
+			Remaining:  int(b.tokens),
+			ResetAfter: resetAfter,
+		}
 	}
 
-	return false, 0
+	tokensNeeded := 1.0 - b.tokens
+	if tokensNeeded < 0 {
+		tokensNeeded = 0
+	}
+	resetAfter := time.Duration(tokensNeeded / b.refillRate * float64(time.Second))
+	return RateLimitDecision{
+		Allowed:    false,
+		Remaining:  0,
+		ResetAfter: resetAfter,
+	}
 }
 
 // Capacity возвращает ёмкость bucket
@@ -119,40 +145,39 @@ func (rl *RateLimiter) GetOrCreateBucket(clientKey string, requests int, period 
 }
 
 // IsAllowed проверяет, разрешен ли запрос. Возвращает (разрешено, лимит, осталось).
-func (rl *RateLimiter) IsAllowed(r *http.Request, endpoint string) (bool, int, int) {
+func (rl *RateLimiter) IsAllowed(r *http.Request, endpoint string) RateLimitDecision {
 	if !rl.config.Enabled {
-		return true, 0, 0
+		return RateLimitDecision{Allowed: true}
 	}
 
 	if endpoint == "/metrics" {
-		return true, 0, 0
+		return RateLimitDecision{Allowed: true}
 	}
 
 	// Check whitelist
 	clientIP := GetClientIP(r)
 	for _, ip := range rl.config.Whitelist {
 		if ip == clientIP {
-			return true, 0, 0
+			return RateLimitDecision{Allowed: true}
 		}
 	}
 
-	limit := 0
-	remaining := 0
+	finalDecision := RateLimitDecision{Allowed: true}
 
 	// Check per-IP rate limit first
 	if rateStr, exists := rl.config.PerIPRate[endpoint]; exists {
 		requests, period, err := ParseRate(rateStr)
 		if err != nil {
-			return true, 0, 0 // Если невалидная конфигурация, разрешаем
+			return RateLimitDecision{Allowed: true}
 		}
 
 		clientKey := clientIP + ":" + endpoint
 		bucket := rl.GetOrCreateBucket(clientKey, requests, period)
-		allowed, rem := bucket.AllowNext()
-		limit = requests
-		remaining = rem
-		if !allowed {
-			return false, limit, 0
+		decision := bucket.AllowNext()
+		decision.Limit = requests
+		finalDecision = decision
+		if !decision.Allowed {
+			return decision
 		}
 	}
 
@@ -160,20 +185,20 @@ func (rl *RateLimiter) IsAllowed(r *http.Request, endpoint string) (bool, int, i
 	if rateStr, exists := rl.config.GlobalRate[endpoint]; exists {
 		requests, period, err := ParseRate(rateStr)
 		if err != nil {
-			return true, limit, remaining // Если невалидная конфигурация, разрешаем
+			return finalDecision
 		}
 
 		clientKey := "global:" + endpoint
 		bucket := rl.GetOrCreateBucket(clientKey, requests, period)
-		allowed, rem := bucket.AllowNext()
-		limit = requests
-		remaining = rem
-		if !allowed {
-			return false, limit, 0
+		decision := bucket.AllowNext()
+		decision.Limit = requests
+		finalDecision = decision
+		if !decision.Allowed {
+			return decision
 		}
 	}
 
-	return true, limit, remaining
+	return finalDecision
 }
 
 // CleanupExpiredBuckets удаляет неиспользуемые bucket'ы
@@ -246,9 +271,9 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 			metrics.activeClients.Set(float64(activeCount))
 		}
 
-		allowed, limit, remaining := rl.IsAllowed(r, endpoint)
+		decision := rl.IsAllowed(r, endpoint)
 
-		if !allowed {
+		if !decision.Allowed {
 			// Increment rate limit exceeded metric if available
 			if metrics != nil {
 				metrics.rateLimitExceeded.Inc()
@@ -262,9 +287,9 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 
 			// Return 429 Too Many Requests
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(decision.Limit))
 			w.Header().Set("X-RateLimit-Remaining", "0")
-			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Minute).Unix(), 10))
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(decision.ResetAfter).Unix(), 10))
 			w.WriteHeader(http.StatusTooManyRequests)
 
 			response := map[string]interface{}{
@@ -277,9 +302,12 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 		}
 
 		// Add rate limit headers
-		if limit > 0 {
-			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
-			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+		if decision.Limit > 0 {
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(decision.Limit))
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(decision.Remaining))
+			if decision.ResetAfter > 0 {
+				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(decision.ResetAfter).Unix(), 10))
+			}
 		}
 
 		next(w, r)
