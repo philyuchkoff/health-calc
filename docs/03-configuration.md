@@ -2,7 +2,7 @@
 
 # Configuration
 
-The service reads a YAML file `health-config.yaml`. The file path is hardcoded in the code (see `calc.go:Start`).
+The service reads a YAML file `health-config.yaml` by default. The path can be overridden with the `CONFIG_PATH` environment variable.
 
 The config is re-read every minute (hot-reload) — settings can be changed without restart.
 

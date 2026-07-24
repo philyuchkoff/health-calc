@@ -932,7 +932,7 @@ func (hc *HealthCalculator) readyHandler(w http.ResponseWriter, r *http.Request)
 // Start запускает основной цикл работы сервиса
 func (hc *HealthCalculator) Start(ctx context.Context) error {
 	// Загружаем конфиг при старте
-	if err := hc.loadConfig("health-config.yaml"); err != nil {
+	if err := hc.loadConfig(configPath()); err != nil {
 		return fmt.Errorf("failed to load initial config: %v", err)
 	}
 
@@ -993,12 +993,19 @@ func (hc *HealthCalculator) watchConfig(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := hc.loadConfig("health-config.yaml"); err != nil {
+			if err := hc.loadConfig(configPath()); err != nil {
 				hc.logger.WithContextFields(context.Background(), SourceConfig).
 					Errorf("Failed to reload config: %v", err)
 			}
 		}
 	}
+}
+
+func configPath() string {
+	if p := os.Getenv("CONFIG_PATH"); p != "" {
+		return p
+	}
+	return "health-config.yaml"
 }
 
 func main() {
