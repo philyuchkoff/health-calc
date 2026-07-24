@@ -115,7 +115,7 @@ func (cb *CircuitBreaker) setState(newState CircuitBreakerState) {
 	cb.state = newState
 
 	if cb.onStateChange != nil {
-		go cb.onStateChange(cb.name, oldState, newState)
+		cb.onStateChange(cb.name, oldState, newState)
 	}
 }
 

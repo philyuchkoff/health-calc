@@ -99,9 +99,6 @@ func TestCircuitBreakerStateChangeCallback(t *testing.T) {
 	_ = cb.Execute(failFunc)
 	_ = cb.Execute(failFunc) // This should trip it
 
-	// Wait a bit for async callback
-	time.Sleep(10 * time.Millisecond)
-
 	if !callbackCalled {
 		t.Error("State change callback was not called")
 	}
