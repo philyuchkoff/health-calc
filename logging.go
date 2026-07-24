@@ -232,10 +232,10 @@ func (e *LogEntry) MetricValue(name string, value float64, normalized float64, f
 // HealthScore логирует расчитанный health score
 func (e *LogEntry) HealthScore(score float64, totalMetrics, degradedMetrics int, duration time.Duration) {
 	fields := logrus.Fields{
-		"health_score":    score,
-		"total_metrics":   totalMetrics,
+		"health_score":     score,
+		"total_metrics":    totalMetrics,
 		"degraded_metrics": degradedMetrics,
-		"calc_duration":  duration.Milliseconds(),
+		"calc_duration":    duration.Milliseconds(),
 	}
 
 	if degradedMetrics > 0 {
@@ -257,8 +257,8 @@ func (e *LogEntry) CircuitBreakerChange(name string, from, to string) {
 // RateLimitViolation логирует превышение rate limit
 func (e *LogEntry) RateLimitViolation(ip, endpoint string) {
 	e.WithFields(logrus.Fields{
-		"client_ip":  ip,
-		"endpoint":   endpoint,
+		"client_ip": ip,
+		"endpoint":  endpoint,
 	}).Warn("Rate limit exceeded")
 }
 

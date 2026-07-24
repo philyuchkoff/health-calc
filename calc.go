@@ -114,14 +114,14 @@ type HealthCalculator struct {
 	// Config reload tracking
 	configReloadTotal prometheus.Counter
 	// Uptime tracking
-	startTime             time.Time
-	serviceUptime         prometheus.Gauge
-	prometheusConnErrors  prometheus.Counter
+	startTime            time.Time
+	serviceUptime        prometheus.Gauge
+	prometheusConnErrors prometheus.Counter
 	// Logging
 	logger *Logger
 	// HTTP metrics
-	httpRequestsTotal    *prometheus.CounterVec
-	httpRequestDuration  *prometheus.HistogramVec
+	httpRequestsTotal   *prometheus.CounterVec
+	httpRequestDuration *prometheus.HistogramVec
 }
 
 // CachedValue хранит кэшированное значение метрики с метаданными
@@ -242,14 +242,14 @@ func NewHealthCalculator() *HealthCalculator {
 			logger.Info("Health calculator service initialized")
 			return logger
 		}(), rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
-		rateLimitExceeded:     rateLimitExceeded,
-		activeClients:         activeClients,
-		configReloadTotal:     configReloadTotal,
-		startTime:             time.Now(),
-		serviceUptime:         serviceUptime,
-		prometheusConnErrors:  prometheusConnErrors,
-		httpRequestsTotal:     httpRequestsTotal,
-		httpRequestDuration:   httpRequestDuration,
+		rateLimitExceeded:    rateLimitExceeded,
+		activeClients:        activeClients,
+		configReloadTotal:    configReloadTotal,
+		startTime:            time.Now(),
+		serviceUptime:        serviceUptime,
+		prometheusConnErrors: prometheusConnErrors,
+		httpRequestsTotal:    httpRequestsTotal,
+		httpRequestDuration:  httpRequestDuration,
 	}
 }
 

@@ -16,14 +16,14 @@ const (
 
 // CircuitBreaker реализует pattern circuit breaker для защиты от каскадных сбоев
 type CircuitBreaker struct {
-	name           string
-	maxFailures    int
-	resetTimeout   time.Duration
-	mutex          sync.RWMutex
-	state          CircuitBreakerState
-	failures       int
-	lastFailTime   time.Time
-	onStateChange  func(name string, from, to CircuitBreakerState)
+	name          string
+	maxFailures   int
+	resetTimeout  time.Duration
+	mutex         sync.RWMutex
+	state         CircuitBreakerState
+	failures      int
+	lastFailTime  time.Time
+	onStateChange func(name string, from, to CircuitBreakerState)
 }
 
 // NewCircuitBreaker создает новый circuit breaker
