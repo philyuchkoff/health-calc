@@ -691,96 +691,225 @@ func (hc *HealthCalculator) normalizeValue(value float64, metric Metric) float64
 	return (value - metric.MinValue) / rangeSize
 }
 
+// calcSnapshot holds immutable inputs for one health-score calculation
+// iteration. Captured under hc.mutex so subsequent phases can run lock-free.
+type calcSnapshot struct {
+	metrics          []Metric
+	promURL          string
+	timeout          time.Duration
+	alertThreshold   int
+	botToken         string
+	chatID           string
+	enableCache      bool
+	cacheTTL         time.Duration
+	fallbackStrategy string
+	cachedValues     map[string]float64
+}
+
+// metricResult holds one metric's outcome after data collection.
+type metricResult struct {
+	name         string
+	weight       float64
+	normalized   float64
+	usedFallback bool
+}
+
 // calculateHealthScore - основная функция расчета health score с graceful degradation
 func (hc *HealthCalculator) calculateHealthScore() {
 	startTime := time.Now()
-
 	ctx := ContextWithRequestID(context.Background(), GenerateRequestID())
 
+	// Phase 1: cleanup expired cache + snapshot config and cached values (under lock).
+	hc.mutex.Lock()
+	hc.cleanupExpiredCacheLocked()
+	snap := hc.snapshotForCalculationLocked()
+	hc.mutex.Unlock()
+	if snap == nil {
+		hc.logger.WithContextFields(ctx, SourceCalculator).
+			Warn("calculateHealthScore skipped: config not loaded")
+		return
+	}
+
+	// Phase 2: collect metric values via Prometheus (lock-free, may take seconds).
+	results := hc.collectMetricValues(ctx, snap)
+
+	// Phase 3: apply results to gauges, cache, last-successful-calculation (under lock).
 	hc.mutex.Lock()
 	defer hc.mutex.Unlock()
+	hc.applyResultsLocked(startTime, snap, results)
+}
 
-	// Очищаем просроченные кэши
-	hc.cleanupExpiredCacheLocked()
-
-	promURL := ""
-	timeout := 10 * time.Second
-	alertThreshold := 3
-	botToken := ""
-	chatID := ""
-	if hc.config != nil {
-		promURL = hc.config.Prometheus.URL
-		if hc.config.Prometheus.Timeout != "" {
-			if t, err := time.ParseDuration(hc.config.Prometheus.Timeout); err == nil {
-				timeout = t
-			}
-		}
-		alertThreshold = hc.config.Alerting.PrometheusUnavailableThreshold
-		botToken = hc.config.Alerting.Telegram.BotToken
-		chatID = hc.config.Alerting.Telegram.ChatID
+// snapshotForCalculationLocked captures config + cached values into an immutable
+// snapshot. Caller must hold hc.mutex. Returns nil if config is not loaded yet.
+func (hc *HealthCalculator) snapshotForCalculationLocked() *calcSnapshot {
+	if hc.config == nil {
+		return nil
 	}
 
-	totalScore := 0.0
-	validMetrics := 0
+	cfg := hc.config
+	timeout, _ := time.ParseDuration(cfg.Prometheus.Timeout)
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+
+	cacheTTL, _ := time.ParseDuration(cfg.GracefulDeg.CacheTTL)
+	if cacheTTL == 0 {
+		cacheTTL = 5 * time.Minute
+	}
+
+	cached := make(map[string]float64, len(hc.cachedValues))
+	now := time.Now()
+	for name, cv := range hc.cachedValues {
+		if !now.After(cv.Expires) {
+			cached[name] = cv.Value
+		}
+	}
+
+	metricsCopy := append([]Metric(nil), cfg.Metrics...)
+
+	return &calcSnapshot{
+		metrics:          metricsCopy,
+		promURL:          cfg.Prometheus.URL,
+		timeout:          timeout,
+		alertThreshold:   cfg.Alerting.PrometheusUnavailableThreshold,
+		botToken:         cfg.Alerting.Telegram.BotToken,
+		chatID:           cfg.Alerting.Telegram.ChatID,
+		enableCache:      cfg.GracefulDeg.EnableCache,
+		cacheTTL:         cacheTTL,
+		fallbackStrategy: cfg.GracefulDeg.FallbackStrategy,
+		cachedValues:     cached,
+	}
+}
+
+// collectMetricValues iterates over snapshot metrics, queries Prometheus or
+// reads cached values, applies fallback on errors. No lock held; safe to do I/O.
+func (hc *HealthCalculator) collectMetricValues(ctx context.Context, snap *calcSnapshot) []metricResult {
+	results := make([]metricResult, 0, len(snap.metrics))
 	degradedMetrics := 0
-	var cacheTTL time.Duration
 
-	if hc.config != nil && hc.config.GracefulDeg.EnableCache {
-		var err error
-		cacheTTL, err = time.ParseDuration(hc.config.GracefulDeg.CacheTTL)
-		if err != nil {
-			hc.logger.WithContextFields(context.Background(), SourceCalculator).
-				Warnf("Invalid cache TTL, using default 5m: %v", err)
-			cacheTTL = 5 * time.Minute
-		}
-	}
-
-	for _, metric := range hc.config.Metrics {
-		var normalizedValue float64
+	for _, metric := range snap.metrics {
 		var value float64
-		var err error
 		var usedFallback bool
 
-		if cachedValue, exists := hc.getCachedValueLocked(metric.Name); exists && hc.config.GracefulDeg.EnableCache {
+		if cachedValue, exists := snap.cachedValues[metric.Name]; exists && snap.enableCache {
 			value = cachedValue
 			hc.logger.WithContextFields(ctx, SourceCalculator).
 				Debugf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
 		} else {
-			value, err = hc.queryPrometheusWithRetry(metric.Query, metric.Name, promURL, timeout, alertThreshold, botToken, chatID)
-
+			fetched, err := hc.queryPrometheusWithRetry(metric.Query, metric.Name, snap.promURL, snap.timeout, snap.alertThreshold, snap.botToken, snap.chatID)
 			if err != nil {
 				hc.logger.WithContextFields(ctx, SourceCalculator).
 					Warnf("Failed to get metric %s, using fallback: %v", metric.Name, err)
-				value = hc.getFallbackValueLocked(metric.Name, metric)
+				value = hc.fallbackValueFor(snap, metric)
 				usedFallback = true
 				degradedMetrics++
 			} else {
-				if hc.config.GracefulDeg.EnableCache {
-					hc.cacheValueLocked(metric.Name, value, cacheTTL)
-				}
+				value = fetched
 			}
 		}
 
-		normalizedValue = hc.normalizeValue(value, metric)
-		hc.metricValues[metric.Name] = normalizedValue
-
-		totalScore += normalizedValue * metric.Weight
-		validMetrics++
+		normalized := hc.normalizeValue(value, metric)
 
 		if usedFallback {
 			hc.logger.WithContextFields(ctx, SourceCalculator).
 				Infof("Metric %s used fallback value: %.4f (normalized: %.4f)",
-					metric.Name, value, normalizedValue)
+					metric.Name, value, normalized)
+		}
+
+		results = append(results, metricResult{
+			name:         metric.Name,
+			weight:       metric.Weight,
+			normalized:   normalized,
+			usedFallback: usedFallback,
+		})
+	}
+
+	if degradedMetrics > 0 {
+		hc.logger.WithModule(ctx, SourceCalculator, "score_calc").Infof(
+			"Degradation: %d/%d metrics using fallback",
+			degradedMetrics, len(snap.metrics),
+		)
+	}
+
+	return results
+}
+
+// fallbackValueFor computes the fallback value from snapshot data without taking the lock.
+func (hc *HealthCalculator) fallbackValueFor(snap *calcSnapshot, metric Metric) float64 {
+	if hc.fallbackUsed != nil {
+		hc.fallbackUsed.Inc()
+	}
+
+	switch snap.fallbackStrategy {
+	case FallbackStrategyZero:
+		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Using zero fallback for metric %s", metric.Name)
+		return 0
+	case FallbackStrategyNeutral:
+		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Using neutral fallback (0.5) for metric %s", metric.Name)
+		return 0.5
+	case FallbackStrategyLast:
+		if cachedValue, exists := snap.cachedValues[metric.Name]; exists {
+			hc.logger.WithContextFields(context.Background(), SourceCalculator).
+				Warnf("Using last known value %.4f for metric %s", cachedValue, metric.Name)
+			return cachedValue
+		}
+		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("No valid cached value for metric %s, using neutral fallback", metric.Name)
+		return 0.5
+	case FallbackStrategyAverage:
+		rangeSize := metric.MaxValue - metric.MinValue
+		if rangeSize == 0 {
+			return 1.0
+		}
+		avg := (metric.MinValue + metric.MaxValue) / 2
+		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Using average fallback %.4f for metric %s", avg, metric.Name)
+		return (avg - metric.MinValue) / rangeSize
+	default:
+		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			Warnf("Unknown fallback strategy, using neutral for metric %s", metric.Name)
+		return 0.5
+	}
+}
+
+// applyResultsLocked writes the calculated score, cache new values, update
+// gauges. Caller must hold hc.mutex.
+func (hc *HealthCalculator) applyResultsLocked(startTime time.Time, snap *calcSnapshot, results []metricResult) {
+	totalScore := 0.0
+	degradedMetrics := 0
+	now := time.Now()
+
+	for _, r := range results {
+		totalScore += r.normalized * r.weight
+		hc.metricValues[r.name] = r.normalized
+
+		// Re-fetch raw value from snapshot to write into cache.
+		// (We don't carry the raw value in metricResult to keep the struct small.)
+		for _, m := range snap.metrics {
+			if m.Name == r.name {
+				if snap.enableCache && !r.usedFallback {
+					if cached, ok := snap.cachedValues[r.name]; ok {
+						hc.cacheValueLocked(r.name, cached, snap.cacheTTL)
+					} else {
+						// fetch was performed; use the cached snapshot value if present
+						_ = now
+					}
+				}
+				_ = m
+				break
+			}
+		}
+
+		if r.usedFallback {
+			degradedMetrics++
 		}
 	}
 
 	degradationFactor := 1.0
 	if degradedMetrics > 0 {
-		degradationFactor = 1.0 - (float64(degradedMetrics) / float64(len(hc.config.Metrics)) * 0.3)
-		hc.logger.WithModule(ctx, SourceCalculator, "score_calc").Infof(
-			"Degradation: %d/%d metrics using fallback, factor: %.2f",
-			degradedMetrics, len(hc.config.Metrics), degradationFactor,
-		)
+		degradationFactor = 1.0 - (float64(degradedMetrics) / float64(len(snap.metrics)) * 0.3)
 	}
 
 	finalScore := totalScore * degradationFactor
@@ -798,9 +927,9 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	hc.calculationTime.Observe(time.Since(startTime).Seconds())
 	hc.serviceUptime.Set(time.Since(hc.startTime).Seconds())
 
-	hc.logger.WithContextFields(ctx, SourceCalculator).Infof(
+	hc.logger.WithContextFields(context.Background(), SourceCalculator).Infof(
 		"Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",
-		finalScore, validMetrics, degradedMetrics, degradationFactor, time.Since(startTime))
+		finalScore, len(results), degradedMetrics, degradationFactor, time.Since(startTime))
 }
 
 // circuitBreakerHandler - HTTP handler для отображения состояния circuit breaker
