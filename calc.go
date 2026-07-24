@@ -828,6 +828,24 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// knownEndpoints is a whitelist of paths used as Prometheus labels to
+// prevent unbounded label cardinality. Any unknown path is bucketed as
+// "/other" to keep time-series count bounded.
+var knownEndpoints = map[string]bool{
+	"/metrics":         true,
+	"/health":          true,
+	"/ready":           true,
+	"/circuit-breaker": true,
+	"/":                true,
+}
+
+func normalizePath(p string) string {
+	if knownEndpoints[p] {
+		return p
+	}
+	return "/other"
+}
+
 // httpMetricsMiddleware записывает RED-метрики для HTTP запросов
 func (hc *HealthCalculator) httpMetricsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -835,7 +853,7 @@ func (hc *HealthCalculator) httpMetricsMiddleware(next http.HandlerFunc) http.Ha
 		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 		next(rec, r)
 		duration := time.Since(start).Seconds()
-		path := r.URL.Path
+		path := normalizePath(r.URL.Path)
 		hc.httpRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rec.statusCode)).Inc()
 		hc.httpRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
 	}
