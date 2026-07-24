@@ -24,7 +24,8 @@ go install github.com/philyuchkoff/health-calc@latest
 Скопировать и отредактировать конфиг:
 
 ```bash
-cp health-config.yaml health-config.yaml
+cp health-config.yaml health-config.yaml.bak
+# Отредактируйте health-config.yaml под вашу среду
 ```
 
 Минимальный рабочий конфиг:

@@ -24,7 +24,8 @@ go install github.com/philyuchkoff/health-calc@latest
 Copy and edit the config:
 
 ```bash
-cp health-config.yaml health-config.yaml
+cp health-config.yaml health-config.yaml.bak
+# Edit health-config.yaml to match your environment
 ```
 
 Minimal working config:
