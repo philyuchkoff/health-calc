@@ -64,3 +64,5 @@ logging:
   level: "info"
   format: "json"
   service: "health-calculator"
+
+unhealthy_threshold: "10m"

@@ -22,14 +22,15 @@ import (
 
 // Config structures - определяют структуру конфигурационного файла
 type Config struct {
-	UpdateInterval string               `yaml:"update_interval"`
-	Metrics        []Metric             `yaml:"metrics"`
-	Alerting       Alerting             `yaml:"alerting"`
-	Prometheus     PrometheusConfig     `yaml:"prometheus"`
-	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
-	GracefulDeg    GracefulDegConfig    `yaml:"graceful_degradation"`
-	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
-	Logging        LoggingConfig        `yaml:"logging"`
+	UpdateInterval     string               `yaml:"update_interval"`
+	Metrics            []Metric             `yaml:"metrics"`
+	Alerting           Alerting             `yaml:"alerting"`
+	Prometheus         PrometheusConfig     `yaml:"prometheus"`
+	CircuitBreaker     CircuitBreakerConfig `yaml:"circuit_breaker"`
+	GracefulDeg        GracefulDegConfig    `yaml:"graceful_degradation"`
+	RateLimit          RateLimitConfig      `yaml:"rate_limit"`
+	Logging            LoggingConfig        `yaml:"logging"`
+	UnhealthyThreshold string               `yaml:"unhealthy_threshold"`
 }
 
 type CircuitBreakerConfig struct {
@@ -101,6 +102,7 @@ type HealthCalculator struct {
 	prometheusDownCount       int
 	httpClient                *http.Client
 	httpClientTelegram        *http.Client
+	unhealthyThreshold        time.Duration
 	mutex                     sync.RWMutex
 	circuitBreaker            *CircuitBreaker
 	circuitBreakerTripped     prometheus.Counter
@@ -252,7 +254,8 @@ func NewHealthCalculator() *HealthCalculator {
 		httpClientTelegram: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-		circuitBreaker: cb,
+		unhealthyThreshold: 10 * time.Minute,
+		circuitBreaker:     cb,
 		logger: func() *Logger {
 			logger := NewLogger(LoggingConfig{
 				Level:   "info",
@@ -338,6 +341,17 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 	// Обновляем настройки логирования
 	if config.Logging.Service != "" {
 		hc.logger = NewLogger(config.Logging)
+	}
+
+	// Unhealthy threshold (used by /health and /ready endpoints)
+	if config.UnhealthyThreshold != "" {
+		dur, err := time.ParseDuration(config.UnhealthyThreshold)
+		if err != nil {
+			hc.logger.WithContextFields(ctx, SourceConfig).
+				Warnf("Invalid unhealthy threshold, using default 10m: %v", err)
+		} else {
+			hc.unhealthyThreshold = dur
+		}
 	}
 
 	// Обновляем настройки graceful degradation
@@ -885,6 +899,7 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
 	lastCalcTime := hc.lastSuccessfulCalculation
 	isDegraded := hc.isDegraded
+	unhealthyThreshold := hc.unhealthyThreshold
 	cbState := hc.circuitBreaker.State()
 	circuitOpen := cbState == StateOpen
 	hc.mutex.RUnlock()
@@ -913,7 +928,7 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Определяем общий статус
-	if lastUpdate > 10*time.Minute {
+	if lastUpdate > unhealthyThreshold {
 		status = "unhealthy"
 		statusCode = http.StatusServiceUnavailable
 		response["status"] = status
@@ -954,7 +969,7 @@ func (hc *HealthCalculator) readyHandler(w http.ResponseWriter, r *http.Request)
 
 	status := "ready"
 	statusCode := http.StatusOK
-	if lastUpdate > 10*time.Minute {
+	if lastUpdate > hc.unhealthyThreshold {
 		status = "not_ready"
 		statusCode = http.StatusServiceUnavailable
 	} else if isDegraded {
