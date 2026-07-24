@@ -40,6 +40,7 @@ health-calc/
 ├── logging.go               # Structured logging
 ├── health-config.yaml       # Configuration file
 ├── Dockerfile               # For building the image
+├── docker-compose.yml       # Docker Compose for local dev
 ├── go.mod / go.sum          # Go dependencies
 ├── docs/                    # Documentation
 └── .github/workflows/       # CI
@@ -114,23 +115,16 @@ Options:
 
 Spin up the service alongside VictoriaMetrics and Grafana for a test environment:
 
-```yaml
-version: "3"
-services:
-  victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
-    ports:
-      - "8428:8428"
-
-  health-calculator:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - PROMETHEUS_URL=http://victoriametrics:8428
-    depends_on:
-      - victoriametrics
+```bash
+docker compose up -d
 ```
+
+The full [docker-compose.yml](../docker-compose.yml) includes:
+- **health-calculator** — the service itself (built from local Dockerfile)
+- **victoriametrics** — Prometheus-compatible metrics storage
+- **grafana** — pre-configured dashboards
+
+The config file is mounted read-only from `./health-config.yaml`.
 
 ## Cross-compilation
 

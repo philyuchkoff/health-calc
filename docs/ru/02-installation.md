@@ -40,6 +40,7 @@ health-calc/
 ├── logging.go               # Структурированное логирование
 ├── health-config.yaml       # Конфигурационный файл
 ├── Dockerfile               # Для сборки образа
+├── docker-compose.yml       # Docker Compose для локальной разработки
 ├── go.mod / go.sum          # Go-зависимости
 ├── docs/                    # Документация
 └── .github/workflows/       # CI
@@ -114,23 +115,16 @@ docker run -p 8080:8080 \
 
 Поднять сервис вместе с VictoriaMetrics и Grafana для тестового окружения:
 
-```yaml
-version: "3"
-services:
-  victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
-    ports:
-      - "8428:8428"
-
-  health-calculator:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - PROMETHEUS_URL=http://victoriametrics:8428
-    depends_on:
-      - victoriametrics
+```bash
+docker compose up -d
 ```
+
+Полный [docker-compose.yml](../../docker-compose.yml) включает:
+- **health-calculator** — сам сервис (собирается из локального Dockerfile)
+- **victoriametrics** — хранилище метрик, совместимое с Prometheus
+- **grafana** — предварительно настроенные дашборды
+
+Файл конфига монтируется read-only из `./health-config.yaml`.
 
 ## Cross-compilation
 

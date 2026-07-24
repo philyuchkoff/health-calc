@@ -1,0 +1,33 @@
+version: "3"
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    ports:
+      - "8428:8428"
+    volumes:
+      - vmdata:/victoria-metrics-data
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - victoriametrics
+      - health-calculator
+
+  health-calculator:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - CONFIG_PATH=/root/health-config.yaml
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./health-config.yaml:/root/health-config.yaml:ro
+    depends_on:
+      - victoriametrics
+
+volumes:
+  vmdata:
