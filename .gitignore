@@ -22,6 +22,6 @@ go.work.sum
 # .vscode/
 
 PLAN.md
-SRE-*.md
+SRE*.md
 .DS_Store
 health-calculator
