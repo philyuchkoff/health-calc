@@ -263,3 +263,9 @@
 **Проблема:** Один клиент с timeout 30s для всех исходящих. Медленный Telegram API мог исчерпать connection pool, и алерт с задержкой 30s неприемлем во время инцидента.
 
 **Фикс:** Добавлен `httpClientTelegram` с timeout 5s. Prometheus queries сохраняют 30s для медленных range queries.
+
+### 39. Hardcoded `unhealthy_threshold`
+
+**Проблема:** `/health` и `/ready` handlers содержали `lastUpdate > 10*time.Minute` хардкод. Оператор не мог настроить staleness detection под специфику деплоя.
+
+**Фикс:** Добавлено поле `unhealthy_threshold` (yaml string, default 10m) в Config. В handlers снимок под RLock для защиты от race.
