@@ -116,17 +116,17 @@ func (l *Logger) WithContextFields(ctx context.Context, source string) *LogEntry
 	}
 
 	// Извлекаем request_id из контекста
-	if reqID, ok := ctx.Value("request_id").(string); ok {
+	if reqID, ok := ctx.Value(requestIDKey).(string); ok {
 		fields["request_id"] = reqID
 	}
 
 	// Извлекаем trace_id из контекста
-	if traceID, ok := ctx.Value("trace_id").(string); ok {
+	if traceID, ok := ctx.Value(traceIDKey).(string); ok {
 		fields["trace_id"] = traceID
 	}
 
 	// Извлекаем span_id из контекста
-	if spanID, ok := ctx.Value("span_id").(string); ok {
+	if spanID, ok := ctx.Value(spanIDKey).(string); ok {
 		fields["span_id"] = spanID
 	}
 
@@ -270,6 +270,16 @@ func (e *LogEntry) ConfigChange(oldVersion, newVersion int) {
 	}).Info("Configuration reloaded")
 }
 
+// contextKey is an unexported type used for context.WithValue keys to
+// prevent collisions with keys defined in other packages (SA1029).
+type contextKey string
+
+const (
+	requestIDKey contextKey = "request_id"
+	traceIDKey   contextKey = "trace_id"
+	spanIDKey    contextKey = "span_id"
+)
+
 // GenerateRequestID генерирует уникальный ID запроса
 func GenerateRequestID() string {
 	return uuid.New().String()
@@ -277,12 +287,12 @@ func GenerateRequestID() string {
 
 // ContextWithRequestID добавляет request_id в контекст
 func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
-	return context.WithValue(ctx, "request_id", requestID)
+	return context.WithValue(ctx, requestIDKey, requestID)
 }
 
 // ContextWithTrace добавляет trace_id и span_id в контекст
 func ContextWithTrace(ctx context.Context, traceID, spanID string) context.Context {
-	ctx = context.WithValue(ctx, "trace_id", traceID)
-	ctx = context.WithValue(ctx, "span_id", spanID)
+	ctx = context.WithValue(ctx, traceIDKey, traceID)
+	ctx = context.WithValue(ctx, spanIDKey, spanID)
 	return ctx
 }
