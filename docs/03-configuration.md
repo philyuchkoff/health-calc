@@ -53,7 +53,6 @@ graceful_degradation:
 rate_limit:
   enabled: true
   global_rate:
-    "/metrics": "100/m"
     "/health": "60/m"
   per_ip_rate:
     "/health": "10/m"
@@ -183,7 +182,7 @@ Protection against overloads. Details — [Rate Limiting](rate-limiting.md).
 rate_limit:
   enabled: true
   global_rate:
-    "/metrics": "100/m"
+    "/health": "60/m"
   per_ip_rate:
     "/health": "10/m"
   whitelist:

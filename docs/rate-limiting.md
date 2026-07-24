@@ -42,7 +42,6 @@ IP addresses in the whitelist bypass rate limiting:
 rate_limit:
   enabled: true                    # Enable/disable rate limiting
   global_rate:                     # Global rate limits
-    "/metrics": "100/m"            # 100 requests per minute
     "/health": "60/m"              # 60 requests per minute
   per_ip_rate:                     # Per-IP rate limits
     "/health": "10/m"              # 10 requests per minute per IP

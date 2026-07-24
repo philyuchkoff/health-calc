@@ -124,6 +124,10 @@ func (rl *RateLimiter) IsAllowed(r *http.Request, endpoint string) (bool, int, i
 		return true, 0, 0
 	}
 
+	if endpoint == "/metrics" {
+		return true, 0, 0
+	}
+
 	// Check whitelist
 	clientIP := GetClientIP(r)
 	for _, ip := range rl.config.Whitelist {

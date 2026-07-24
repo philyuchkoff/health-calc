@@ -42,12 +42,11 @@ IP адреса в whitelist игнорируют rate limiting:
 rate_limit:
   enabled: true                    # Включить/выключить rate limiting
   global_rate:                     # Глобальные лимиты
-    "/metrics": "100/m"            # 100 запросов в минуту
     "/health": "60/m"              # 60 запросов в минуту
   per_ip_rate:                     # Лимиты на IP
     "/health": "10/m"              # 10 запросов в минуту на IP
     "/circuit-breaker": "20/m"     # 20 запросов в минуту на IP
-  whitelist:                        # Исключенные IP
+  whitelist:                        # Исключённые IP
     - "127.0.0.1"
     - "::1"
     - "10.0.0.0/8"
