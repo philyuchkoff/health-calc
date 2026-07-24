@@ -143,3 +143,21 @@
 **Проблема:** `rate(health_calculator_config_reload_total[5m]) < 1` срабатывает даже при 0 reloads (0 rate).
 
 **Фикс:** Исправлен в документации для сравнения с ошибками, а не с общим числом перезагрузок.
+
+---
+
+## SRE Audit 2026-07-24
+
+### S1. SRE-*.md и SRE.md не игнорировались по единой маске
+
+**Проблема:** `.gitignore` содержал две отдельные строки `SRE-*.md` и `SRE.md`. Новые аудиты с другими именами (например `SRE-foo.md`) попадали бы в индекс.
+
+**Фикс:** Заменено на единую маску `SRE*.md`.
+
+### 21. `/metrics` под rate limit — Prometheus self-throttled
+
+**Проблема:** Конфигурация `global_rate: { "/metrics": "100/m" }` ограничивала собственные scrape-запросы Prometheus. При стандартном scrape_interval=15s получалось 4 запроса/мин — укладывается, но при scrape_interval=5s (12/мин) уже на грани. Любое сокращение интервала или дополнительный scrape job ломал сбор метрик.
+
+**Почему:** `IsAllowed()` применяет rate limit ко всем endpoints одинаково, не различая операторский трафик (Prometheus) и клиентский.
+
+**Фикс:** В `ratelimit.go` добавлен ранний return для `endpoint == "/metrics"` до проверки per-IP/global лимитов. Удалена запись `/metrics` из `health-config.yaml` и примеров в `docs/03-configuration.md`, `docs/rate-limiting.md` (EN+RU).
