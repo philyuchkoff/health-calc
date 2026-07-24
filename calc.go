@@ -100,6 +100,7 @@ type HealthCalculator struct {
 	lastSuccessfulCalculation time.Time
 	prometheusDownCount       int
 	httpClient                *http.Client
+	httpClientTelegram        *http.Client
 	mutex                     sync.RWMutex
 	circuitBreaker            *CircuitBreaker
 	circuitBreakerTripped     prometheus.Counter
@@ -247,6 +248,9 @@ func NewHealthCalculator() *HealthCalculator {
 		maxAgeDuration:        10 * time.Minute, // по умолчанию
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
+		},
+		httpClientTelegram: &http.Client{
+			Timeout: 5 * time.Second,
 		},
 		circuitBreaker: cb,
 		logger: func() *Logger {
@@ -640,7 +644,7 @@ func (hc *HealthCalculator) sendAlert(ctx context.Context, message string, botTo
 
 	jsonData, _ := json.Marshal(payload)
 
-	resp, err := hc.httpClient.Post(url, "application/json", bytes.NewReader(jsonData))
+	resp, err := hc.httpClientTelegram.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
 		hc.logger.WithError(err, SourceAlerting).Error("Failed to send Telegram alert")
 		return
