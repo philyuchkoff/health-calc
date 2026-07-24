@@ -21,21 +21,20 @@ type RateLimiter struct {
 
 // Bucket представляет leaky bucket для одного клиента
 type Bucket struct {
-	capacity     int
-	tokens       float64
-	refillRate   float64
-	lastRefill   time.Time
-	mutex        sync.Mutex
+	capacity   int
+	tokens     float64
+	refillRate float64
+	lastRefill time.Time
+	mutex      sync.Mutex
 }
 
 // RateLimitConfig конфигурация rate limiting
 type RateLimitConfig struct {
 	Enabled    bool              `yaml:"enabled"`
-	GlobalRate map[string]string `yaml:"global_rate"`     // endpoint -> rate
-	PerIPRate  map[string]string `yaml:"per_ip_rate"`      // endpoint -> rate per IP
-	Whitelist  []string          `yaml:"whitelist"`        // IP whitelist
+	GlobalRate map[string]string `yaml:"global_rate"` // endpoint -> rate
+	PerIPRate  map[string]string `yaml:"per_ip_rate"` // endpoint -> rate per IP
+	Whitelist  []string          `yaml:"whitelist"`   // IP whitelist
 }
-
 
 // NewRateLimiter создает новый rate limiter
 func NewRateLimiter(config RateLimitConfig) *RateLimiter {

@@ -50,9 +50,9 @@ func TestGetFallbackValue(t *testing.T) {
 	}
 
 	metric := Metric{
-		Name:      "test_metric",
-		MinValue:  0,
-		MaxValue:  100,
+		Name:     "test_metric",
+		MinValue: 0,
+		MaxValue: 100,
 	}
 
 	// Test neutral strategy
