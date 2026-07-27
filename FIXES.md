@@ -269,3 +269,16 @@
 **Проблема:** `/health` и `/ready` handlers содержали `lastUpdate > 10*time.Minute` хардкод. Оператор не мог настроить staleness detection под специфику деплоя.
 
 **Фикс:** Добавлено поле `unhealthy_threshold` (yaml string, default 10m) в Config. В handlers снимок под RLock для защиты от race.
+
+### 40. [C1] `calculateHealthScore` держит write-lock всё время HTTP-запросов
+
+**Проблема:** `hc.mutex.Lock()` держался на всю длительность опроса Prometheus (до 30s × 4 метрики = 120s). HTTP handlers (`/health`, `/ready`, `/metrics`, `/circuit-breaker`) зависали на RLock. K8s liveness probe (periodSeconds=10, timeout=1s) таймаутил → pod restart → следующий расчёт опять под lock → CrashLoopBackOff каскад.
+
+**Почему:** Изначальный дизайн защищал consistency под единым lock, не учёл что HTTP handlers используют тот же mutex. Это был Critical риск: при первом же медленном Prometheus (что нормально для больших queries) сервис уходил в boot loop.
+
+**Фикс:** Рефакторинг в 3 фазы:
+- **Phase 1 (write-lock, микросекунды):** cleanupExpiredCacheLocked + snapshot config + cached values в неизменяемый `calcSnapshot` struct
+- **Phase 2 (lock-free):** collectMetricValues — HTTP запросы к Prometheus, может занимать секунды, handlers работают без блокировки
+- **Phase 3 (write-lock, микросекунды):** applyResultsLocked пишет новые cache values, gauge, lastSuccessfulCalculation
+
+Lock window сократился с минут до <1ms на фазу. Старый `getFallbackValueLocked` заменён на `fallbackValueFor(snapshot, metric)` — работает с snapshot, без lock.
