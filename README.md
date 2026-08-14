@@ -1,4 +1,4 @@
-> [Русская версия](README-RU.md) · [Documentation](https://philyuchkoff.github.io/health-calc/)
+> [Русская версия](README-ru.md) · [Documentation](https://philyuchkoff.github.io/health-calc/)
 
 # Health score calculator
 
@@ -167,7 +167,6 @@ graceful_degradation:
 rate_limit:
   enabled: true
   global_rate:
-    "/metrics": "100/m"
     "/health": "60/m"
   per_ip_rate:
     "/health": "10/m"
