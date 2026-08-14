@@ -1,4 +1,8 @@
-# Fixes Summary
+> [← Back to README](https://github.com/philyuchkoff/health-calc) · [Documentation](https://philyuchkoff.github.io/health-calc/) · [Русская версия](https://github.com/philyuchkoff/health-calc/blob/main/README-ru.md)
+
+# Changelog
+
+All notable changes to this project are documented here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Critical
 
