@@ -40,7 +40,7 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 	hc.mutex.RLock()
 	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
 	lastCalcTime := hc.lastSuccessfulCalculation
-	isDegraded := hc.isDegraded
+	isDegraded := hc.degradation.isDegraded
 	unhealthyThreshold := hc.unhealthyThreshold
 	cbState := hc.circuitBreaker.State()
 	circuitOpen := cbState == StateOpen
@@ -96,7 +96,7 @@ func (hc *HealthCalculator) readyHandler(w http.ResponseWriter, r *http.Request)
 	configLoaded := hc.config != nil
 	hasCalculation := !hc.lastSuccessfulCalculation.IsZero()
 	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
-	isDegraded := hc.isDegraded
+	isDegraded := hc.degradation.isDegraded
 	unhealthyThreshold := hc.unhealthyThreshold
 	hc.mutex.RUnlock()
 

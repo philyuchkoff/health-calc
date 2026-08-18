@@ -28,12 +28,8 @@ type HealthCalculator struct {
 	mutex                     sync.RWMutex
 	circuitBreaker            *CircuitBreaker
 	circuitBreakerTripped     prometheus.Counter
-	// Graceful degradation fields
-	cachedValues   map[string]*CachedValue
-	degradedMode   prometheus.Gauge
-	fallbackUsed   prometheus.Counter
-	maxAgeDuration time.Duration
-	isDegraded     bool // Track degraded state separately
+	// Graceful degradation: cache + fallback + degraded state
+	degradation gracefulDegState
 	// Rate limiting fields
 	rateLimiter       *RateLimiter
 	rateLimitExceeded prometheus.Counter
@@ -56,6 +52,17 @@ type CachedValue struct {
 	Value     float64
 	Timestamp time.Time
 	Expires   time.Time
+}
+
+// gracefulDegState groups all state related to graceful degradation:
+// the cache of last-known metric values, fallback counters, and the
+// degraded-mode flag. Reading/writing happens under hc.mutex.
+type gracefulDegState struct {
+	cachedValues   map[string]*CachedValue
+	degradedMode   prometheus.Gauge
+	fallbackUsed   prometheus.Counter
+	maxAgeDuration time.Duration
+	isDegraded     bool
 }
 
 // registerOrLog registers Prometheus collectors, ignoring AlreadyRegistered
@@ -166,10 +173,12 @@ func NewHealthCalculator() *HealthCalculator {
 		metricsFailed:         metricsFailed,
 		calculationTime:       calculationTime,
 		circuitBreakerTripped: circuitBreakerTripped,
-		degradedMode:          degradedMode,
-		fallbackUsed:          fallbackUsed,
-		cachedValues:          make(map[string]*CachedValue),
-		maxAgeDuration:        10 * time.Minute, // по умолчанию
+		degradation: gracefulDegState{
+			degradedMode:   degradedMode,
+			fallbackUsed:   fallbackUsed,
+			cachedValues:   make(map[string]*CachedValue),
+			maxAgeDuration: 10 * time.Minute, // по умолчанию
+		},
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -209,7 +218,7 @@ func (hc *HealthCalculator) cacheValue(metricName string, value float64, ttl tim
 }
 
 func (hc *HealthCalculator) cacheValueLocked(metricName string, value float64, ttl time.Duration) {
-	hc.cachedValues[metricName] = &CachedValue{
+	hc.degradation.cachedValues[metricName] = &CachedValue{
 		Value:     value,
 		Timestamp: time.Now(),
 		Expires:   time.Now().Add(ttl),
@@ -224,7 +233,7 @@ func (hc *HealthCalculator) getCachedValue(metricName string) (float64, bool) {
 }
 
 func (hc *HealthCalculator) getCachedValueLocked(metricName string) (float64, bool) {
-	cached, exists := hc.cachedValues[metricName]
+	cached, exists := hc.degradation.cachedValues[metricName]
 	if !exists {
 		return 0, false
 	}
@@ -244,8 +253,8 @@ func (hc *HealthCalculator) getFallbackValue(metricName string, metric Metric) f
 }
 
 func (hc *HealthCalculator) getFallbackValueLocked(metricName string, metric Metric) float64 {
-	if hc.fallbackUsed != nil {
-		hc.fallbackUsed.Inc()
+	if hc.degradation.fallbackUsed != nil {
+		hc.degradation.fallbackUsed.Inc()
 	}
 
 	logger := hc.logger
@@ -296,10 +305,10 @@ func (hc *HealthCalculator) cleanupExpiredCache() {
 
 func (hc *HealthCalculator) cleanupExpiredCacheLocked() {
 	now := time.Now()
-	maxAge := hc.maxAgeDuration
-	for name, cached := range hc.cachedValues {
+	maxAge := hc.degradation.maxAgeDuration
+	for name, cached := range hc.degradation.cachedValues {
 		if now.After(cached.Expires) || now.After(cached.Timestamp.Add(maxAge)) {
-			delete(hc.cachedValues, name)
+			delete(hc.degradation.cachedValues, name)
 		}
 	}
 }
@@ -372,9 +381,9 @@ func (hc *HealthCalculator) snapshotForCalculationLocked() *calcSnapshot {
 		cacheTTL = 5 * time.Minute
 	}
 
-	cached := make(map[string]float64, len(hc.cachedValues))
+	cached := make(map[string]float64, len(hc.degradation.cachedValues))
 	now := time.Now()
-	for name, cv := range hc.cachedValues {
+	for name, cv := range hc.degradation.cachedValues {
 		if !now.After(cv.Expires) {
 			cached[name] = cv.Value
 		}
@@ -451,8 +460,8 @@ func (hc *HealthCalculator) collectMetricValues(ctx context.Context, snap *calcS
 
 // fallbackValueFor computes the fallback value from snapshot data without taking the lock.
 func (hc *HealthCalculator) fallbackValueFor(snap *calcSnapshot, metric Metric) float64 {
-	if hc.fallbackUsed != nil {
-		hc.fallbackUsed.Inc()
+	if hc.degradation.fallbackUsed != nil {
+		hc.degradation.fallbackUsed.Inc()
 	}
 
 	switch snap.fallbackStrategy {
@@ -530,11 +539,11 @@ func (hc *HealthCalculator) applyResultsLocked(startTime time.Time, snap *calcSn
 	finalScore := totalScore * degradationFactor
 
 	if degradedMetrics > 0 {
-		hc.degradedMode.Set(1)
-		hc.isDegraded = true
+		hc.degradation.degradedMode.Set(1)
+		hc.degradation.isDegraded = true
 	} else {
-		hc.degradedMode.Set(0)
-		hc.isDegraded = false
+		hc.degradation.degradedMode.Set(0)
+		hc.degradation.isDegraded = false
 	}
 
 	hc.healthScore.Set(finalScore)

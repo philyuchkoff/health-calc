@@ -188,7 +188,7 @@ func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 				Warnf("Invalid max age in config, using default 10m: %v", err)
 			maxAge = 10 * time.Minute
 		}
-		hc.maxAgeDuration = maxAge
+		hc.degradation.maxAgeDuration = maxAge
 	}
 
 	validStrategies := map[string]bool{

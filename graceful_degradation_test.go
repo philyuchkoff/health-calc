@@ -7,8 +7,10 @@ import (
 
 func TestCacheValue(t *testing.T) {
 	hc := &HealthCalculator{
-		cachedValues: make(map[string]*CachedValue),
-		logger:       NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		degradation: gracefulDegState{
+			cachedValues: make(map[string]*CachedValue),
+		},
+		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Test caching
@@ -39,14 +41,16 @@ func TestCacheValue(t *testing.T) {
 
 func TestGetFallbackValue(t *testing.T) {
 	hc := &HealthCalculator{
-		cachedValues: make(map[string]*CachedValue),
+		degradation: gracefulDegState{
+			cachedValues:   make(map[string]*CachedValue),
+			maxAgeDuration: 10 * time.Minute,
+		},
 		config: &Config{
 			GracefulDeg: GracefulDegConfig{
 				FallbackStrategy: FallbackStrategyNeutral,
 			},
 		},
-		maxAgeDuration: 10 * time.Minute,
-		logger:         NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	metric := Metric{
@@ -94,9 +98,11 @@ func TestGetFallbackValue(t *testing.T) {
 
 func TestCleanupExpiredCache(t *testing.T) {
 	hc := &HealthCalculator{
-		cachedValues:   make(map[string]*CachedValue),
-		logger:         NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
-		maxAgeDuration: 10 * time.Minute,
+		degradation: gracefulDegState{
+			cachedValues:   make(map[string]*CachedValue),
+			maxAgeDuration: 10 * time.Minute,
+		},
+		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Add some values
@@ -105,8 +111,8 @@ func TestCleanupExpiredCache(t *testing.T) {
 	hc.cacheValue("metric3", 0.3, 1*time.Second)
 
 	// Should have 3 values
-	if len(hc.cachedValues) != 3 {
-		t.Errorf("Expected 3 cached values, got %d", len(hc.cachedValues))
+	if len(hc.degradation.cachedValues) != 3 {
+		t.Errorf("Expected 3 cached values, got %d", len(hc.degradation.cachedValues))
 	}
 
 	// Wait for some to expire
@@ -116,20 +122,22 @@ func TestCleanupExpiredCache(t *testing.T) {
 	hc.cleanupExpiredCache()
 
 	// Should have only 1 value left
-	if len(hc.cachedValues) != 1 {
-		t.Errorf("Expected 1 cached value after cleanup, got %d", len(hc.cachedValues))
+	if len(hc.degradation.cachedValues) != 1 {
+		t.Errorf("Expected 1 cached value after cleanup, got %d", len(hc.degradation.cachedValues))
 	}
 
 	// metric2 should still exist
-	if _, exists := hc.cachedValues["metric2"]; !exists {
+	if _, exists := hc.degradation.cachedValues["metric2"]; !exists {
 		t.Error("Expected metric2 to still exist in cache")
 	}
 }
 
 func TestParseGracefulDegConfig(t *testing.T) {
 	hc := &HealthCalculator{
-		maxAgeDuration: 10 * time.Minute,
-		logger:         NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		degradation: gracefulDegState{
+			maxAgeDuration: 10 * time.Minute,
+		},
+		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Test valid config
@@ -143,8 +151,8 @@ func TestParseGracefulDegConfig(t *testing.T) {
 	hc.parseGracefulDegConfig(config)
 
 	// Check max age was updated
-	if hc.maxAgeDuration != 15*time.Minute {
-		t.Errorf("Expected max age 15m, got %v", hc.maxAgeDuration)
+	if hc.degradation.maxAgeDuration != 15*time.Minute {
+		t.Errorf("Expected max age 15m, got %v", hc.degradation.maxAgeDuration)
 	}
 
 	// Test invalid strategy
@@ -165,7 +173,7 @@ func TestParseGracefulDegConfig(t *testing.T) {
 
 	hc.parseGracefulDegConfig(config2)
 	// Should not panic and max age should reset to default (10m)
-	if hc.maxAgeDuration != 10*time.Minute {
-		t.Errorf("Expected max age to be reset to 10m for invalid config, got %v", hc.maxAgeDuration)
+	if hc.degradation.maxAgeDuration != 10*time.Minute {
+		t.Errorf("Expected max age to be reset to 10m for invalid config, got %v", hc.degradation.maxAgeDuration)
 	}
 }
