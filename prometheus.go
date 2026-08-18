@@ -42,7 +42,7 @@ func (hc *HealthCalculator) queryPrometheus(query string, promURL string, timeou
 	defer cancel()
 	req = req.WithContext(ctx)
 
-	resp, err := hc.httpClient.Do(req)
+	resp, err := hc.http.prometheus.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -98,14 +98,14 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 			value, queryErr := hc.queryPrometheus(query, promURL, timeout)
 			if queryErr == nil {
 				result = value
-				hc.prometheusDownCount = 0
-				hc.metricsFetched.Inc()
+				hc.calc.prometheusDownCount = 0
+				hc.metrics.metricsFetched.Inc()
 				return nil
 			}
 
 			lastErr = queryErr
-			hc.metricsFailed.Inc()
-			hc.prometheusConnErrors.Inc()
+			hc.metrics.metricsFailed.Inc()
+			hc.metrics.prometheusConnErrors.Inc()
 			hc.logger.WithContextFields(context.Background(), SourcePrometheus).
 				Warnf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, queryErr)
 
@@ -114,11 +114,11 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 
 		err = lastErr
 
-		hc.prometheusDownCount++
-		if hc.prometheusDownCount >= alertThreshold {
+		hc.calc.prometheusDownCount++
+		if hc.calc.prometheusDownCount >= alertThreshold {
 			hc.sendAlert(context.Background(),
 				fmt.Sprintf("Prometheus unavailable after %d attempts. Last error: %v",
-					hc.prometheusDownCount, lastErr),
+					hc.calc.prometheusDownCount, lastErr),
 				botToken, chatID)
 		}
 
@@ -156,7 +156,7 @@ func (hc *HealthCalculator) sendAlert(ctx context.Context, message string, botTo
 
 	jsonData, _ := json.Marshal(payload)
 
-	resp, err := hc.httpClientTelegram.Post(url, "application/json", bytes.NewReader(jsonData))
+	resp, err := hc.http.telegram.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
 		hc.logger.WithError(err, SourceAlerting).Error("Failed to send Telegram alert")
 		return

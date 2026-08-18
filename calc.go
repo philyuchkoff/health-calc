@@ -14,37 +14,46 @@ import (
 
 // HealthCalculator - основной сервисный объект
 type HealthCalculator struct {
-	config                    *Config
-	healthScore               prometheus.Gauge
+	config             *Config
+	mutex              sync.RWMutex
+	logger             *Logger
+	startTime          time.Time
+	unhealthyThreshold time.Duration
+	circuitBreaker     *CircuitBreaker
+	rateLimiter        *RateLimiter
+	degradation        gracefulDegState
+	calc               calcState
+	metrics            metricsState
+	http               httpClients
+}
+
+// calcState хранит состояние последнего расчёта здоровья
+type calcState struct {
 	metricValues              map[string]float64
-	metricsFetched            prometheus.Counter
-	metricsFailed             prometheus.Counter
-	calculationTime           prometheus.Histogram
 	lastSuccessfulCalculation time.Time
 	prometheusDownCount       int
-	httpClient                *http.Client
-	httpClientTelegram        *http.Client
-	unhealthyThreshold        time.Duration
-	mutex                     sync.RWMutex
-	circuitBreaker            *CircuitBreaker
-	circuitBreakerTripped     prometheus.Counter
-	// Graceful degradation: cache + fallback + degraded state
-	degradation gracefulDegState
-	// Rate limiting fields
-	rateLimiter       *RateLimiter
-	rateLimitExceeded prometheus.Counter
-	activeClients     prometheus.Gauge
-	// Config reload tracking
-	configReloadTotal prometheus.Counter
-	// Uptime tracking
-	startTime            time.Time
-	serviceUptime        prometheus.Gauge
-	prometheusConnErrors prometheus.Counter
-	// Logging
-	logger *Logger
-	// HTTP metrics
-	httpRequestsTotal   *prometheus.CounterVec
-	httpRequestDuration *prometheus.HistogramVec
+}
+
+// metricsState группирует все Prometheus-коллекторы сервиса
+type metricsState struct {
+	healthScore           prometheus.Gauge
+	metricsFetched        prometheus.Counter
+	metricsFailed         prometheus.Counter
+	calculationTime       prometheus.Histogram
+	circuitBreakerTripped prometheus.Counter
+	rateLimitExceeded     prometheus.Counter
+	activeClients         prometheus.Gauge
+	configReloadTotal     prometheus.Counter
+	serviceUptime         prometheus.Gauge
+	prometheusConnErrors  prometheus.Counter
+	httpRequestsTotal     *prometheus.CounterVec
+	httpRequestDuration   *prometheus.HistogramVec
+}
+
+// httpClients группирует исходящие HTTP-клиенты
+type httpClients struct {
+	prometheus *http.Client
+	telegram   *http.Client
 }
 
 // CachedValue хранит кэшированное значение метрики с метаданными
@@ -167,23 +176,11 @@ func NewHealthCalculator() *HealthCalculator {
 	cb := NewCircuitBreaker("prometheus", 3, 30*time.Second)
 
 	return &HealthCalculator{
-		healthScore:           healthScore,
-		metricValues:          make(map[string]float64),
-		metricsFetched:        metricsFetched,
-		metricsFailed:         metricsFailed,
-		calculationTime:       calculationTime,
-		circuitBreakerTripped: circuitBreakerTripped,
 		degradation: gracefulDegState{
 			degradedMode:   degradedMode,
 			fallbackUsed:   fallbackUsed,
 			cachedValues:   make(map[string]*CachedValue),
 			maxAgeDuration: 10 * time.Minute, // по умолчанию
-		},
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		httpClientTelegram: &http.Client{
-			Timeout: 5 * time.Second,
 		},
 		unhealthyThreshold: 10 * time.Minute,
 		circuitBreaker:     cb,
@@ -196,14 +193,32 @@ func NewHealthCalculator() *HealthCalculator {
 			logger.Info("Health calculator service initialized")
 			return logger
 		}(), rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
-		rateLimitExceeded:    rateLimitExceeded,
-		activeClients:        activeClients,
-		configReloadTotal:    configReloadTotal,
-		startTime:            time.Now(),
-		serviceUptime:        serviceUptime,
-		prometheusConnErrors: prometheusConnErrors,
-		httpRequestsTotal:    httpRequestsTotal,
-		httpRequestDuration:  httpRequestDuration,
+		calc: calcState{
+			metricValues: make(map[string]float64),
+		},
+		metrics: metricsState{
+			healthScore:           healthScore,
+			metricsFetched:        metricsFetched,
+			metricsFailed:         metricsFailed,
+			calculationTime:       calculationTime,
+			circuitBreakerTripped: circuitBreakerTripped,
+			rateLimitExceeded:     rateLimitExceeded,
+			activeClients:         activeClients,
+			configReloadTotal:     configReloadTotal,
+			serviceUptime:         serviceUptime,
+			prometheusConnErrors:  prometheusConnErrors,
+			httpRequestsTotal:     httpRequestsTotal,
+			httpRequestDuration:   httpRequestDuration,
+		},
+		http: httpClients{
+			prometheus: &http.Client{
+				Timeout: 30 * time.Second,
+			},
+			telegram: &http.Client{
+				Timeout: 5 * time.Second,
+			},
+		},
+		startTime: time.Now(),
 	}
 }
 
@@ -507,7 +522,7 @@ func (hc *HealthCalculator) applyResultsLocked(startTime time.Time, snap *calcSn
 
 	for _, r := range results {
 		totalScore += r.normalized * r.weight
-		hc.metricValues[r.name] = r.normalized
+		hc.calc.metricValues[r.name] = r.normalized
 
 		// Re-fetch raw value from snapshot to write into cache.
 		// (We don't carry the raw value in metricResult to keep the struct small.)
@@ -546,10 +561,10 @@ func (hc *HealthCalculator) applyResultsLocked(startTime time.Time, snap *calcSn
 		hc.degradation.isDegraded = false
 	}
 
-	hc.healthScore.Set(finalScore)
-	hc.lastSuccessfulCalculation = time.Now()
-	hc.calculationTime.Observe(time.Since(startTime).Seconds())
-	hc.serviceUptime.Set(time.Since(hc.startTime).Seconds())
+	hc.metrics.healthScore.Set(finalScore)
+	hc.calc.lastSuccessfulCalculation = time.Now()
+	hc.metrics.calculationTime.Observe(time.Since(startTime).Seconds())
+	hc.metrics.serviceUptime.Set(time.Since(hc.startTime).Seconds())
 
 	hc.logger.WithContextFields(context.Background(), SourceCalculator).Infof(
 		"Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",

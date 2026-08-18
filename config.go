@@ -70,7 +70,7 @@ type PrometheusConfig struct {
 // YAML configuration at configPath. Hot-reload safe — increments the reload
 // counter on every call (including failures).
 func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
-	defer hc.configReloadTotal.Inc()
+	defer hc.metrics.configReloadTotal.Inc()
 
 	ctx := context.Background()
 
@@ -120,7 +120,7 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 			hc.logger.WithContextFields(context.Background(), SourceConfig).
 				Infof("Circuit breaker '%s' changed state from %v to %v", name, from, to)
 			if to == StateOpen {
-				hc.circuitBreakerTripped.Inc()
+				hc.metrics.circuitBreakerTripped.Inc()
 			}
 		})
 		hc.circuitBreaker = cb

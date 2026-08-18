@@ -38,8 +38,8 @@ func (hc *HealthCalculator) circuitBreakerHandler(w http.ResponseWriter, r *http
 // fallback values are in use or the circuit breaker is open.
 func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request) {
 	hc.mutex.RLock()
-	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
-	lastCalcTime := hc.lastSuccessfulCalculation
+	lastUpdate := time.Since(hc.calc.lastSuccessfulCalculation)
+	lastCalcTime := hc.calc.lastSuccessfulCalculation
 	isDegraded := hc.degradation.isDegraded
 	unhealthyThreshold := hc.unhealthyThreshold
 	cbState := hc.circuitBreaker.State()
@@ -94,8 +94,8 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 func (hc *HealthCalculator) readyHandler(w http.ResponseWriter, r *http.Request) {
 	hc.mutex.RLock()
 	configLoaded := hc.config != nil
-	hasCalculation := !hc.lastSuccessfulCalculation.IsZero()
-	lastUpdate := time.Since(hc.lastSuccessfulCalculation)
+	hasCalculation := !hc.calc.lastSuccessfulCalculation.IsZero()
+	lastUpdate := time.Since(hc.calc.lastSuccessfulCalculation)
 	isDegraded := hc.degradation.isDegraded
 	unhealthyThreshold := hc.unhealthyThreshold
 	hc.mutex.RUnlock()

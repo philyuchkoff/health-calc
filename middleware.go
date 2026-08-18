@@ -40,8 +40,8 @@ func (hc *HealthCalculator) recoveryMiddleware(next http.HandlerFunc) http.Handl
 // gauge.
 func (hc *HealthCalculator) wrapWithRateLimit(handler http.HandlerFunc) http.HandlerFunc {
 	metrics := &RateLimitMetrics{
-		rateLimitExceeded: hc.rateLimitExceeded,
-		activeClients:     hc.activeClients,
+		rateLimitExceeded: hc.metrics.rateLimitExceeded,
+		activeClients:     hc.metrics.activeClients,
 	}
 	return RateLimitMiddleware(hc.rateLimiter, metrics, hc.logger, handler)
 }
@@ -56,7 +56,7 @@ func (hc *HealthCalculator) httpMetricsMiddleware(next http.HandlerFunc) http.Ha
 		next(rec, r)
 		duration := time.Since(start).Seconds()
 		path := normalizePath(r.URL.Path)
-		hc.httpRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rec.statusCode)).Inc()
-		hc.httpRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+		hc.metrics.httpRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rec.statusCode)).Inc()
+		hc.metrics.httpRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
 	}
 }
