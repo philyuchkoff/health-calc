@@ -286,3 +286,31 @@ All notable changes to this project are documented here. The format is loosely b
 - **Phase 3 (write-lock, микросекунды):** applyResultsLocked пишет новые cache values, gauge, lastSuccessfulCalculation
 
 Lock window сократился с минут до <1ms на фазу. Старый `getFallbackValueLocked` заменён на `fallbackValueFor(snapshot, metric)` — работает с snapshot, без lock.
+
+## Refactoring
+
+### 41. `calc.go` разбит на модули по ответственности
+
+**Проблема:** `calc.go` вырос до 1252 строк и совмещал конфигурацию, HTTP-клиента, Prometheus-запросы, алерты, handlers, middleware и основной цикл — god object, который тяжело читать и тестировать.
+
+**Фикс:** Код разнесён по файлам (общий объём ~1324 строк):
+- `main.go` — `configPath()`, `main()`, `buildMux()`, `rootHandler()`
+- `config.go` — структуры `Config`/`GracefulDegConfig`, константы `FallbackStrategy`, `loadConfig()`, `parseGracefulDegConfig()`
+- `prometheus.go` — `PrometheusResponse`, `queryPrometheus()`, `queryPrometheusWithRetry()`, `sendAlert()`, `normalizeValue()`, `knownEndpoints`/`normalizePath()`
+- `handlers.go` — `circuitBreakerHandler`, `healthHandler`, `readyHandler`
+- `middleware.go` — `statusRecorder`, `recoveryMiddleware`, `wrapWithRateLimit`, `httpMetricsMiddleware`
+- `calc.go` — уменьшен до 624 строк: `HealthCalculator`, цикл расчёта, кэш и graceful degradation
+
+### 42. `HealthCalculator` начал терять статус god object: поля graceful degradation вынесены в `gracefulDegState`
+
+**Проблема:** `HealthCalculator` держит 30 полей пяти разных ответственностей (кэш, метрики, circuit breaker, rate limit, конфиг).
+
+**Фикс (шаг 1):** Поля graceful degradation (`cachedValues`, `degradedMode`, `fallbackUsed`, `maxAgeDuration`, `isDegraded`) сгруппированы в подструктуру `gracefulDegState`. Чтение/запись по-прежнему под `hc.mutex`, поведение не изменилось. Последующие шаги — выделение MetricsCollector / HealthScorer сервисов.
+
+### 43. Документация приведена к структуре репозитория
+
+**Фикс:**
+- `PLAN.md` удалён (дублировал CHANGELOG)
+- `FIXES.md` переименован в `docs/CHANGELOG.md` (git mv), добавлены ссылки на README и GitHub Pages
+- `README-RU.md` → `README-ru.md`, синхронизированы бейджи (Docker, Go Report Card), убран `/metrics` из примеров rate_limit (теперь он явно исключён в коде)
+- Все документы (кроме README и LICENSE) перенесены в `docs/`
