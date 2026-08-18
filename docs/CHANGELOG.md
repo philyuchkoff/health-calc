@@ -305,7 +305,24 @@ Lock window сократился с минут до <1ms на фазу. Стар
 
 **Проблема:** `HealthCalculator` держит 30 полей пяти разных ответственностей (кэш, метрики, circuit breaker, rate limit, конфиг).
 
-**Фикс (шаг 1):** Поля graceful degradation (`cachedValues`, `degradedMode`, `fallbackUsed`, `maxAgeDuration`, `isDegraded`) сгруппированы в подструктуру `gracefulDegState`. Чтение/запись по-прежнему под `hc.mutex`, поведение не изменилось. Последующие шаги — выделение MetricsCollector / HealthScorer сервисов.
+**Фикс (шаг 1):** Поля graceful degradation (`cachedValues`, `degradedMode`, `fallbackUsed`, `maxAgeDuration`, `isDegraded`) сгруппированы в подструктуру `gracefulDegState`. Чтение/запись по-прежнему под `hc.mutex`, поведение не изменилось.
+
+**Фикс (шаг 2):** Все 30 полей сгруппированы в 4 подструктуры по ответственности — главный struct сокращён до 11 полей:
+- `calcState` — состояние последнего расчёта (`metricValues`, `lastSuccessfulCalculation`, `prometheusDownCount`)
+- `metricsState` — все 12 Prometheus-коллекторов
+- `httpClients` — исходящие HTTP-клиенты (`prometheus` 30s, `telegram` 5s)
+- `degradation` — graceful degradation (кэш, fallback, флаг degraded)
+
+### 44. Независимые модули вынесены в `internal/` пакеты
+
+**Проблема:** 15 .go файлов в корне main-пакета — ответственности (логирование, circuit breaker, rate limiter) смешаны в одном пакете.
+
+**Фикс:** Код разделён на пакеты:
+- `internal/logging` — Logger, LogEntry, Source* константы
+- `internal/circuitbreaker` — CircuitBreaker, State*, ErrCircuitBreakerOpen; добавлен метод `Name()`
+- `internal/ratelimit` — RateLimiter, RateLimitMiddleware; поля `RateLimitMetrics` экспортированы
+
+В корне осталось 7 .go файлов main-пакета (calc, config, handlers, middleware, prometheus, main + тесты). Зависимости: `ratelimit → logging`. Ни один internal-пакет не зависит от main.
 
 ### 43. Документация приведена к структуре репозитория
 
