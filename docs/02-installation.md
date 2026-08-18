@@ -34,10 +34,16 @@ After cloning, the directory structure:
 
 ```
 health-calc/
-├── calc.go                  # Core service
-├── circuitbreaker.go        # Circuit breaker
-├── ratelimit.go             # Rate limiting
-├── logging.go               # Structured logging
+├── calc.go                  # Core service: HealthCalculator, calculation loop
+├── config.go                # Config types, YAML loading
+├── prometheus.go            # Prometheus client, alerting
+├── handlers.go              # HTTP handlers (/health, /ready, /circuit-breaker)
+├── middleware.go            # HTTP middleware (recovery, rate limit, RED metrics)
+├── main.go                  # Entrypoint, HTTP server bootstrap
+├── internal/
+│   ├── logging/             # Structured logging (logrus)
+│   ├── circuitbreaker/      # Circuit breaker pattern
+│   └── ratelimit/           # Token bucket rate limiting
 ├── health-config.yaml       # Configuration file
 ├── Dockerfile               # For building the image
 ├── docker-compose.yml       # Docker Compose for local dev

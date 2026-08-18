@@ -29,7 +29,7 @@ lsof -i :8080
 ss -tlnp | grep 8080
 ```
 
-If the port is in use — either stop the process or change the port in the code (`server.Addr` in `calc.go`).
+If the port is in use — either stop the process or change the port in the code (`server.Addr` in `main.go`).
 
 **Step 2. Check health-config.yaml**
 

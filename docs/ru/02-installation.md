@@ -34,11 +34,17 @@ cd health-calc
 
 ```
 health-calc/
-├── calc.go                  # Основной сервис
-├── circuitbreaker.go        # Circuit breaker
-├── ratelimit.go             # Rate limiting
-├── logging.go               # Структурированное логирование
-├── health-config.yaml       # Конфигурационный файл
+├── calc.go                  # Основной сервис: HealthCalculator, цикл расчёта
+├── config.go                # Структуры конфига, загрузка YAML
+├── prometheus.go            # Клиент Prometheus, алерты
+├── handlers.go              # HTTP-обработчики (/health, /ready, /circuit-breaker)
+├── middleware.go            # HTTP-мидлвары (recovery, rate limit, RED-метрики)
+├── main.go                  # Точка входа, запуск HTTP-сервера
+├── internal/
+│   ├── logging/             # Структурированное логирование (logrus)
+│   ├── circuitbreaker/      # Паттерн circuit breaker
+│   └── ratelimit/           # Rate limiting (token bucket)
+├── health-config.yaml       # Файл конфигурации
 ├── Dockerfile               # Для сборки образа
 ├── docker-compose.yml       # Docker Compose для локальной разработки
 ├── go.mod / go.sum          # Go-зависимости
