@@ -328,6 +328,6 @@ Lock window сократился с минут до <1ms на фазу. Стар
 
 **Фикс:**
 - `PLAN.md` удалён (дублировал CHANGELOG)
-- `FIXES.md` переименован в `docs/CHANGELOG.md` (git mv), добавлены ссылки на README и GitHub Pages
+- `FIXES.md` переименован в `docs/CHANGELOG.md` (git mv), добавлены ссылки на README и GitHub Pages; позже перенесён в корень репозитория (`CHANGELOG.md`)
 - `README-RU.md` → `README-ru.md`, синхронизированы бейджи (Docker, Go Report Card), убран `/metrics` из примеров rate_limit (теперь он явно исключён в коде)
 - Все документы (кроме README и LICENSE) перенесены в `docs/`
