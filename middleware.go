@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"health-calculator/internal/logging"
+	"health-calculator/internal/ratelimit"
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the actual status
@@ -25,7 +28,7 @@ func (hc *HealthCalculator) recoveryMiddleware(next http.HandlerFunc) http.Handl
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				hc.logger.WithContextFields(r.Context(), SourceHTTP).
+				hc.logger.WithContextFields(r.Context(), logging.SourceHTTP).
 					Errorf("panic recovered: %v", rec)
 				http.Error(w, `{"error":"internal server error"}`,
 					http.StatusInternalServerError)
@@ -36,14 +39,14 @@ func (hc *HealthCalculator) recoveryMiddleware(next http.HandlerFunc) http.Handl
 }
 
 // wrapWithRateLimit applies rate limiting to a handler using the configured
-// RateLimiter. Records the rate_limit_exceeded counter and active client
+// ratelimit.RateLimiter. Records the rate_limit_exceeded counter and active client
 // gauge.
 func (hc *HealthCalculator) wrapWithRateLimit(handler http.HandlerFunc) http.HandlerFunc {
-	metrics := &RateLimitMetrics{
-		rateLimitExceeded: hc.metrics.rateLimitExceeded,
-		activeClients:     hc.metrics.activeClients,
+	metrics := &ratelimit.RateLimitMetrics{
+		RateLimitExceeded: hc.metrics.rateLimitExceeded,
+		ActiveClients:     hc.metrics.activeClients,
 	}
-	return RateLimitMiddleware(hc.rateLimiter, metrics, hc.logger, handler)
+	return ratelimit.RateLimitMiddleware(hc.rateLimiter, metrics, hc.logger, handler)
 }
 
 // httpMetricsMiddleware records RED metrics (request count + duration) for

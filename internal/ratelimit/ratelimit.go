@@ -1,4 +1,4 @@
-package main
+package ratelimit
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"health-calculator/internal/logging"
 )
 
 // RateLimiter реализует rate limiting с помощью leaky bucket алгоритма
@@ -259,7 +261,7 @@ func (e *RateLimitError) Error() string {
 }
 
 // RateLimitMiddleware создает middleware для rate limiting с метриками
-func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Logger, next http.HandlerFunc) http.HandlerFunc {
+func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *logging.Logger, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		endpoint := r.URL.Path
 
@@ -268,7 +270,7 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 			rl.mutex.RLock()
 			activeCount := len(rl.clients)
 			rl.mutex.RUnlock()
-			metrics.activeClients.Set(float64(activeCount))
+			metrics.ActiveClients.Set(float64(activeCount))
 		}
 
 		decision := rl.IsAllowed(r, endpoint)
@@ -276,12 +278,12 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 		if !decision.Allowed {
 			// Increment rate limit exceeded metric if available
 			if metrics != nil {
-				metrics.rateLimitExceeded.Inc()
+				metrics.RateLimitExceeded.Inc()
 			}
 
 			// Log rate limit violation
 			if logger != nil {
-				logger.WithContextFields(context.Background(), SourceRateLimit).
+				logger.WithContextFields(context.Background(), logging.SourceRateLimit).
 					RateLimitViolation(GetClientIP(r), endpoint)
 			}
 
@@ -316,6 +318,6 @@ func RateLimitMiddleware(rl *RateLimiter, metrics *RateLimitMetrics, logger *Log
 
 // RateLimitMetrics хранит метрики для rate limiting
 type RateLimitMetrics struct {
-	rateLimitExceeded prometheus.Counter
-	activeClients     prometheus.Gauge
+	RateLimitExceeded prometheus.Counter
+	ActiveClients     prometheus.Gauge
 }

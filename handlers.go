@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"health-calculator/internal/circuitbreaker"
 )
 
 // circuitBreakerHandler reports the current state of the circuit breaker.
@@ -14,16 +16,16 @@ func (hc *HealthCalculator) circuitBreakerHandler(w http.ResponseWriter, r *http
 	state := hc.circuitBreaker.State()
 	stateName := "unknown"
 	switch state {
-	case StateClosed:
+	case circuitbreaker.StateClosed:
 		stateName = "closed"
-	case StateOpen:
+	case circuitbreaker.StateOpen:
 		stateName = "open"
-	case StateHalfOpen:
+	case circuitbreaker.StateHalfOpen:
 		stateName = "half-open"
 	}
 
 	response := map[string]interface{}{
-		"name":     hc.circuitBreaker.name,
+		"name":     hc.circuitBreaker.Name(),
 		"state":    stateName,
 		"failures": hc.circuitBreaker.Failures(),
 	}
@@ -43,7 +45,7 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 	isDegraded := hc.degradation.isDegraded
 	unhealthyThreshold := hc.unhealthyThreshold
 	cbState := hc.circuitBreaker.State()
-	circuitOpen := cbState == StateOpen
+	circuitOpen := cbState == circuitbreaker.StateOpen
 	hc.mutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -52,11 +54,11 @@ func (hc *HealthCalculator) healthHandler(w http.ResponseWriter, r *http.Request
 	statusCode := http.StatusOK
 	stateName := "unknown"
 	switch cbState {
-	case StateClosed:
+	case circuitbreaker.StateClosed:
 		stateName = "closed"
-	case StateOpen:
+	case circuitbreaker.StateOpen:
 		stateName = "open"
-	case StateHalfOpen:
+	case circuitbreaker.StateHalfOpen:
 		stateName = "half-open"
 	}
 	response := map[string]interface{}{

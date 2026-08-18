@@ -8,19 +8,23 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"health-calculator/internal/circuitbreaker"
+	"health-calculator/internal/logging"
+	"health-calculator/internal/ratelimit"
 )
 
 // Config is the root YAML configuration structure.
 type Config struct {
-	UpdateInterval     string               `yaml:"update_interval"`
-	Metrics            []Metric             `yaml:"metrics"`
-	Alerting           Alerting             `yaml:"alerting"`
-	Prometheus         PrometheusConfig     `yaml:"prometheus"`
-	CircuitBreaker     CircuitBreakerConfig `yaml:"circuit_breaker"`
-	GracefulDeg        GracefulDegConfig    `yaml:"graceful_degradation"`
-	RateLimit          RateLimitConfig      `yaml:"rate_limit"`
-	Logging            LoggingConfig        `yaml:"logging"`
-	UnhealthyThreshold string               `yaml:"unhealthy_threshold"`
+	UpdateInterval     string                    `yaml:"update_interval"`
+	Metrics            []Metric                  `yaml:"metrics"`
+	Alerting           Alerting                  `yaml:"alerting"`
+	Prometheus         PrometheusConfig          `yaml:"prometheus"`
+	CircuitBreaker     CircuitBreakerConfig      `yaml:"circuit_breaker"`
+	GracefulDeg        GracefulDegConfig         `yaml:"graceful_degradation"`
+	RateLimit          ratelimit.RateLimitConfig `yaml:"rate_limit"`
+	Logging            logging.LoggingConfig     `yaml:"logging"`
+	UnhealthyThreshold string                    `yaml:"unhealthy_threshold"`
 }
 
 type CircuitBreakerConfig struct {
@@ -80,12 +84,12 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 	}
 
 	if hc.logger == nil {
-		hc.logger = NewLogger(LoggingConfig{
+		hc.logger = logging.NewLogger(logging.LoggingConfig{
 			Level:   "info",
 			Format:  "json",
 			Service: "health-calculator",
 		})
-		hc.logger.Info("Logger initialized (default config)")
+		hc.logger.Info("logging.Logger initialized (default config)")
 	}
 
 	expanded := os.ExpandEnv(string(data))
@@ -110,16 +114,16 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 	if config.CircuitBreaker.MaxFailures > 0 {
 		resetTimeout, err := time.ParseDuration(config.CircuitBreaker.ResetTimeout)
 		if err != nil {
-			hc.logger.WithContextFields(ctx, SourceConfig).Warnf(
+			hc.logger.WithContextFields(ctx, logging.SourceConfig).Warnf(
 				"Invalid circuit breaker reset timeout, using default 30s: %v", err)
 			resetTimeout = 30 * time.Second
 		}
 
-		cb := NewCircuitBreaker("prometheus", config.CircuitBreaker.MaxFailures, resetTimeout)
-		cb.SetStateChangeCallback(func(name string, from, to CircuitBreakerState) {
-			hc.logger.WithContextFields(context.Background(), SourceConfig).
+		cb := circuitbreaker.NewCircuitBreaker("prometheus", config.CircuitBreaker.MaxFailures, resetTimeout)
+		cb.SetStateChangeCallback(func(name string, from, to circuitbreaker.CircuitBreakerState) {
+			hc.logger.WithContextFields(context.Background(), logging.SourceConfig).
 				Infof("Circuit breaker '%s' changed state from %v to %v", name, from, to)
-			if to == StateOpen {
+			if to == circuitbreaker.StateOpen {
 				hc.metrics.circuitBreakerTripped.Inc()
 			}
 		})
@@ -127,7 +131,7 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 	}
 
 	if config.Logging.Service != "" {
-		hc.logger = NewLogger(config.Logging)
+		hc.logger = logging.NewLogger(config.Logging)
 	}
 
 	if config.GracefulDeg.CacheTTL != "" {
@@ -137,34 +141,34 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 	if config.UnhealthyThreshold != "" {
 		dur, err := time.ParseDuration(config.UnhealthyThreshold)
 		if err != nil {
-			hc.logger.WithContextFields(ctx, SourceConfig).
+			hc.logger.WithContextFields(ctx, logging.SourceConfig).
 				Warnf("Invalid unhealthy threshold, using default 10m: %v", err)
 		} else {
 			hc.unhealthyThreshold = dur
 		}
 	}
 
-	hc.rateLimiter = NewRateLimiter(config.RateLimit)
+	hc.rateLimiter = ratelimit.NewRateLimiter(config.RateLimit)
 	hc.mutex.Unlock()
 
 	if config.CircuitBreaker.MaxFailures > 0 {
-		hc.logger.WithContextFields(ctx, SourceConfig).Infof(
+		hc.logger.WithContextFields(ctx, logging.SourceConfig).Infof(
 			"Circuit breaker updated: max_failures=%d, reset_timeout=%s",
 			config.CircuitBreaker.MaxFailures, config.CircuitBreaker.ResetTimeout)
 	}
 	if config.Logging.Service != "" {
-		hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Info(
+		hc.logger.WithModule(context.Background(), logging.SourceConfig, "config_load").Info(
 			"Logging configuration updated",
 		)
 	}
 	if config.RateLimit.Enabled {
-		hc.logger.WithModule(context.Background(), SourceConfig, "config_load").Infof(
+		hc.logger.WithModule(context.Background(), logging.SourceConfig, "config_load").Infof(
 			"Rate limiting enabled with %d global rules and %d per-IP rules",
 			len(config.RateLimit.GlobalRate), len(config.RateLimit.PerIPRate),
 		)
 	}
 
-	hc.logger.WithContextFields(ctx, SourceConfig).Infof(
+	hc.logger.WithContextFields(ctx, logging.SourceConfig).Infof(
 		"Config loaded successfully: %d metrics, update interval: %s",
 		len(config.Metrics), config.UpdateInterval)
 	return nil
@@ -175,7 +179,7 @@ func (hc *HealthCalculator) loadConfig(configPath string) (err error) {
 func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 	if config.CacheTTL != "" {
 		if _, err := time.ParseDuration(config.CacheTTL); err != nil {
-			hc.logger.WithContextFields(context.Background(), SourceConfig).
+			hc.logger.WithContextFields(context.Background(), logging.SourceConfig).
 				Warnf("Invalid cache TTL in config, using default 5m: %v", err)
 			config.CacheTTL = "5m"
 		}
@@ -184,7 +188,7 @@ func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 	if config.MaxAge != "" {
 		maxAge, err := time.ParseDuration(config.MaxAge)
 		if err != nil {
-			hc.logger.WithContextFields(context.Background(), SourceConfig).
+			hc.logger.WithContextFields(context.Background(), logging.SourceConfig).
 				Warnf("Invalid max age in config, using default 10m: %v", err)
 			maxAge = 10 * time.Minute
 		}
@@ -199,14 +203,14 @@ func (hc *HealthCalculator) parseGracefulDegConfig(config *GracefulDegConfig) {
 	}
 
 	if !validStrategies[config.FallbackStrategy] {
-		hc.logger.WithContextFields(context.Background(), SourceConfig).
+		hc.logger.WithContextFields(context.Background(), logging.SourceConfig).
 			Warnf("Invalid fallback strategy '%s', using 'neutral'", config.FallbackStrategy)
 		config.FallbackStrategy = FallbackStrategyNeutral
 	} else if config.FallbackStrategy == "" {
 		config.FallbackStrategy = FallbackStrategyNeutral
 	}
 
-	hc.logger.WithContextFields(context.Background(), SourceConfig).Infof(
+	hc.logger.WithContextFields(context.Background(), logging.SourceConfig).Infof(
 		"Graceful degradation configured: cache=%v, ttl=%s, maxAge=%s, strategy=%s",
 		config.EnableCache, config.CacheTTL, config.MaxAge, config.FallbackStrategy)
 }

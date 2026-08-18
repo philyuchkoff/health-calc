@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"health-calculator/internal/circuitbreaker"
+	"health-calculator/internal/logging"
 )
 
 const maxPrometheusResponseSize = 10 * 1024 * 1024 // 10 MB
@@ -106,7 +109,7 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 			lastErr = queryErr
 			hc.metrics.metricsFailed.Inc()
 			hc.metrics.prometheusConnErrors.Inc()
-			hc.logger.WithContextFields(context.Background(), SourcePrometheus).
+			hc.logger.WithContextFields(context.Background(), logging.SourcePrometheus).
 				Warnf("Retry %d/%d for metric %s failed: %v", i+1, maxRetries, metricName, queryErr)
 
 			time.Sleep(time.Duration(i+1) * time.Second)
@@ -125,8 +128,8 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 		return fmt.Errorf("all retries failed: %v", lastErr)
 	})
 
-	if cbErr == ErrCircuitBreakerOpen {
-		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+	if cbErr == circuitbreaker.ErrCircuitBreakerOpen {
+		hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Circuit breaker is open, using fallback value for metric %s", metricName)
 		return 0.5, nil
 	}
@@ -140,7 +143,7 @@ func (hc *HealthCalculator) queryPrometheusWithRetry(query string, metricName st
 
 // sendAlert posts an alert message to the configured Telegram chat.
 func (hc *HealthCalculator) sendAlert(ctx context.Context, message string, botToken string, chatID string) {
-	logger := hc.logger.WithContextFields(ctx, SourceAlerting)
+	logger := hc.logger.WithContextFields(ctx, logging.SourceAlerting)
 
 	if botToken == "" || chatID == "" {
 		logger.WithField("message", message).Warn("ALERT would be sent - no Telegram credentials configured")
@@ -158,7 +161,7 @@ func (hc *HealthCalculator) sendAlert(ctx context.Context, message string, botTo
 
 	resp, err := hc.http.telegram.Post(url, "application/json", bytes.NewReader(jsonData))
 	if err != nil {
-		hc.logger.WithError(err, SourceAlerting).Error("Failed to send Telegram alert")
+		hc.logger.WithError(err, logging.SourceAlerting).Error("Failed to send Telegram alert")
 		return
 	}
 	defer resp.Body.Close()

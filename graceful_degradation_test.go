@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"health-calculator/internal/logging"
 )
 
 func TestCacheValue(t *testing.T) {
@@ -10,7 +12,7 @@ func TestCacheValue(t *testing.T) {
 		degradation: gracefulDegState{
 			cachedValues: make(map[string]*CachedValue),
 		},
-		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		logger: logging.NewLogger(logging.LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Test caching
@@ -50,7 +52,7 @@ func TestGetFallbackValue(t *testing.T) {
 				FallbackStrategy: FallbackStrategyNeutral,
 			},
 		},
-		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		logger: logging.NewLogger(logging.LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	metric := Metric{
@@ -102,7 +104,7 @@ func TestCleanupExpiredCache(t *testing.T) {
 			cachedValues:   make(map[string]*CachedValue),
 			maxAgeDuration: 10 * time.Minute,
 		},
-		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		logger: logging.NewLogger(logging.LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Add some values
@@ -137,7 +139,7 @@ func TestParseGracefulDegConfig(t *testing.T) {
 		degradation: gracefulDegState{
 			maxAgeDuration: 10 * time.Minute,
 		},
-		logger: NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "test"}),
+		logger: logging.NewLogger(logging.LoggingConfig{Level: "error", Format: "text", Service: "test"}),
 	}
 
 	// Test valid config

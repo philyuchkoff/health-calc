@@ -1,4 +1,4 @@
-package main
+package circuitbreaker
 
 import (
 	"sync"
@@ -34,6 +34,11 @@ func NewCircuitBreaker(name string, maxFailures int, resetTimeout time.Duration)
 		resetTimeout: resetTimeout,
 		state:        StateClosed,
 	}
+}
+
+// Name возвращает имя circuit breaker
+func (cb *CircuitBreaker) Name() string {
+	return cb.name
 }
 
 // SetStateChangeCallback устанавливает callback для уведомления об изменениях состояния

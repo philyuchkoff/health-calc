@@ -8,6 +8,10 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"health-calculator/internal/circuitbreaker"
+	"health-calculator/internal/logging"
+	"health-calculator/internal/ratelimit"
 )
 
 // Config types and loadConfig live in config.go
@@ -16,11 +20,11 @@ import (
 type HealthCalculator struct {
 	config             *Config
 	mutex              sync.RWMutex
-	logger             *Logger
+	logger             *logging.Logger
 	startTime          time.Time
 	unhealthyThreshold time.Duration
-	circuitBreaker     *CircuitBreaker
-	rateLimiter        *RateLimiter
+	circuitBreaker     *circuitbreaker.CircuitBreaker
+	rateLimiter        *ratelimit.RateLimiter
 	degradation        gracefulDegState
 	calc               calcState
 	metrics            metricsState
@@ -173,7 +177,7 @@ func NewHealthCalculator() *HealthCalculator {
 
 	// Создаем circuit breaker с настройками по умолчанию
 	// Они будут обновлены при загрузке конфига
-	cb := NewCircuitBreaker("prometheus", 3, 30*time.Second)
+	cb := circuitbreaker.NewCircuitBreaker("prometheus", 3, 30*time.Second)
 
 	return &HealthCalculator{
 		degradation: gracefulDegState{
@@ -184,15 +188,15 @@ func NewHealthCalculator() *HealthCalculator {
 		},
 		unhealthyThreshold: 10 * time.Minute,
 		circuitBreaker:     cb,
-		logger: func() *Logger {
-			logger := NewLogger(LoggingConfig{
+		logger: func() *logging.Logger {
+			logger := logging.NewLogger(logging.LoggingConfig{
 				Level:   "info",
 				Format:  "json",
 				Service: "health-calculator",
 			})
 			logger.Info("Health calculator service initialized")
 			return logger
-		}(), rateLimiter: NewRateLimiter(RateLimitConfig{}), // Will be updated in loadConfig
+		}(), rateLimiter: ratelimit.NewRateLimiter(ratelimit.RateLimitConfig{}), // Will be updated in loadConfig
 		calc: calcState{
 			metricValues: make(map[string]float64),
 		},
@@ -274,30 +278,30 @@ func (hc *HealthCalculator) getFallbackValueLocked(metricName string, metric Met
 
 	logger := hc.logger
 	if logger == nil {
-		logger = NewLogger(LoggingConfig{Level: "error", Format: "text", Service: "health-calculator"})
+		logger = logging.NewLogger(logging.LoggingConfig{Level: "error", Format: "text", Service: "health-calculator"})
 	}
 
 	switch hc.config.GracefulDeg.FallbackStrategy {
 	case FallbackStrategyZero:
-		logger.WithContextFields(context.Background(), SourceCalculator).
+		logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Using zero fallback for metric %s", metricName)
 		return 0
 	case FallbackStrategyNeutral:
-		logger.WithContextFields(context.Background(), SourceCalculator).
+		logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Using neutral fallback (0.5) for metric %s", metricName)
 		return 0.5
 	case FallbackStrategyLast:
 		if cachedValue, exists := hc.getCachedValueLocked(metricName); exists {
-			logger.WithContextFields(context.Background(), SourceCalculator).
+			logger.WithContextFields(context.Background(), logging.SourceCalculator).
 				Warnf("Using last known value %.4f for metric %s", cachedValue, metricName)
 			return cachedValue
 		}
-		logger.WithContextFields(context.Background(), SourceCalculator).
+		logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("No valid cached value for metric %s, using neutral fallback", metricName)
 		return 0.5
 	case FallbackStrategyAverage:
 		avg := (metric.MinValue + metric.MaxValue) / 2
-		logger.WithContextFields(context.Background(), SourceCalculator).
+		logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Using average fallback %.4f for metric %s", avg, metricName)
 		rangeSize := metric.MaxValue - metric.MinValue
 		if rangeSize == 0 {
@@ -305,7 +309,7 @@ func (hc *HealthCalculator) getFallbackValueLocked(metricName string, metric Met
 		}
 		return (avg - metric.MinValue) / rangeSize
 	default:
-		logger.WithContextFields(context.Background(), SourceCalculator).
+		logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Unknown fallback strategy, using neutral for metric %s", metricName)
 		return 0.5
 	}
@@ -356,7 +360,7 @@ type metricResult struct {
 // calculateHealthScore - основная функция расчета health score с graceful degradation
 func (hc *HealthCalculator) calculateHealthScore() {
 	startTime := time.Now()
-	ctx := ContextWithRequestID(context.Background(), GenerateRequestID())
+	ctx := logging.ContextWithRequestID(context.Background(), logging.GenerateRequestID())
 
 	// Phase 1: cleanup expired cache + snapshot config and cached values (under lock).
 	hc.mutex.Lock()
@@ -364,7 +368,7 @@ func (hc *HealthCalculator) calculateHealthScore() {
 	snap := hc.snapshotForCalculationLocked()
 	hc.mutex.Unlock()
 	if snap == nil {
-		hc.logger.WithContextFields(ctx, SourceCalculator).
+		hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 			Warn("calculateHealthScore skipped: config not loaded")
 		return
 	}
@@ -432,12 +436,12 @@ func (hc *HealthCalculator) collectMetricValues(ctx context.Context, snap *calcS
 
 		if cachedValue, exists := snap.cachedValues[metric.Name]; exists && snap.enableCache {
 			value = cachedValue
-			hc.logger.WithContextFields(ctx, SourceCalculator).
+			hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 				Debugf("Using cached value for metric %s: %.4f", metric.Name, cachedValue)
 		} else {
 			fetched, err := hc.queryPrometheusWithRetry(metric.Query, metric.Name, snap.promURL, snap.timeout, snap.alertThreshold, snap.botToken, snap.chatID)
 			if err != nil {
-				hc.logger.WithContextFields(ctx, SourceCalculator).
+				hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 					Warnf("Failed to get metric %s, using fallback: %v", metric.Name, err)
 				value = hc.fallbackValueFor(snap, metric)
 				usedFallback = true
@@ -450,7 +454,7 @@ func (hc *HealthCalculator) collectMetricValues(ctx context.Context, snap *calcS
 		normalized := hc.normalizeValue(value, metric)
 
 		if usedFallback {
-			hc.logger.WithContextFields(ctx, SourceCalculator).
+			hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 				Infof("Metric %s used fallback value: %.4f (normalized: %.4f)",
 					metric.Name, value, normalized)
 		}
@@ -464,7 +468,7 @@ func (hc *HealthCalculator) collectMetricValues(ctx context.Context, snap *calcS
 	}
 
 	if degradedMetrics > 0 {
-		hc.logger.WithModule(ctx, SourceCalculator, "score_calc").Infof(
+		hc.logger.WithModule(ctx, logging.SourceCalculator, "score_calc").Infof(
 			"Degradation: %d/%d metrics using fallback",
 			degradedMetrics, len(snap.metrics),
 		)
@@ -481,20 +485,20 @@ func (hc *HealthCalculator) fallbackValueFor(snap *calcSnapshot, metric Metric) 
 
 	switch snap.fallbackStrategy {
 	case FallbackStrategyZero:
-		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+		hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Using zero fallback for metric %s", metric.Name)
 		return 0
 	case FallbackStrategyNeutral:
-		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+		hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Using neutral fallback (0.5) for metric %s", metric.Name)
 		return 0.5
 	case FallbackStrategyLast:
 		if cachedValue, exists := snap.cachedValues[metric.Name]; exists {
-			hc.logger.WithContextFields(context.Background(), SourceCalculator).
+			hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 				Warnf("Using last known value %.4f for metric %s", cachedValue, metric.Name)
 			return cachedValue
 		}
-		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+		hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("No valid cached value for metric %s, using neutral fallback", metric.Name)
 		return 0.5
 	case FallbackStrategyAverage:
@@ -503,11 +507,11 @@ func (hc *HealthCalculator) fallbackValueFor(snap *calcSnapshot, metric Metric) 
 			return 1.0
 		}
 		avg := (metric.MinValue + metric.MaxValue) / 2
-		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+		hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Using average fallback %.4f for metric %s", avg, metric.Name)
 		return (avg - metric.MinValue) / rangeSize
 	default:
-		hc.logger.WithContextFields(context.Background(), SourceCalculator).
+		hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).
 			Warnf("Unknown fallback strategy, using neutral for metric %s", metric.Name)
 		return 0.5
 	}
@@ -566,7 +570,7 @@ func (hc *HealthCalculator) applyResultsLocked(startTime time.Time, snap *calcSn
 	hc.metrics.calculationTime.Observe(time.Since(startTime).Seconds())
 	hc.metrics.serviceUptime.Set(time.Since(hc.startTime).Seconds())
 
-	hc.logger.WithContextFields(context.Background(), SourceCalculator).Infof(
+	hc.logger.WithContextFields(context.Background(), logging.SourceCalculator).Infof(
 		"Health score updated: %.4f (from %d metrics, %d degraded, factor %.2f, took %v)",
 		finalScore, len(results), degradedMetrics, degradationFactor, time.Since(startTime))
 }
@@ -588,12 +592,12 @@ func (hc *HealthCalculator) Start(ctx context.Context) error {
 
 	interval, err := time.ParseDuration(hc.config.UpdateInterval)
 	if err != nil {
-		hc.logger.WithContextFields(ctx, SourceCalculator).
+		hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 			Warnf("Invalid update interval, using default 5m: %v", err)
 		interval = 5 * time.Minute
 	}
 
-	hc.logger.WithContextFields(ctx, SourceCalculator).
+	hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 		Infof("Starting health calculation loop with interval: %v", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -603,7 +607,7 @@ func (hc *HealthCalculator) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			hc.logger.WithContextFields(ctx, SourceCalculator).
+			hc.logger.WithContextFields(ctx, logging.SourceCalculator).
 				Info("Shutting down health calculator gracefully")
 			return nil
 		case <-ticker.C:
@@ -638,7 +642,7 @@ func (hc *HealthCalculator) watchConfig(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := hc.loadConfig(configPath()); err != nil {
-				hc.logger.WithContextFields(context.Background(), SourceConfig).
+				hc.logger.WithContextFields(context.Background(), logging.SourceConfig).
 					Errorf("Failed to reload config: %v", err)
 			}
 		}
