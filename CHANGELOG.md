@@ -384,3 +384,9 @@ Lock window сократился с минут до <1ms на фазу. Стар
 - директива `go` `1.25.0` → `1.26.0` (требование обновлённых модулей)
 
 **Проверка:** build/vet/test (-race)/lint — OK, `govulncheck` — уязвимостей нет.
+
+### 49. `actions/configure-pages` обновлён до v6
+
+**Проблема:** `actions/configure-pages@v5` собран на Node.js 20 (deprecated на GitHub Actions).
+
+**Фикс:** `@v5` → `@v6` (Node 24).
