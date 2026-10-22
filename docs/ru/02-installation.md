@@ -93,8 +93,8 @@ docker build -t health-calculator .
 Используется multi-stage сборка:
 
 ```
-Stage 1 (builder):        golang:1.27.3-alpine → компиляция
-Stage 2 (runtime):        alpine:latest → только бинарник + config
+Stage 1 (builder):        golang:1.27.3-alpine3.23 → компиляция
+Stage 2 (runtime):        alpine:3.23 → только бинарник + config
 ```
 
 Итоговый образ — ~16 MB.
