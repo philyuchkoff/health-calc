@@ -6,7 +6,7 @@
 
 ![](./img/health-calc.png)
 
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.27.3+-00ADD8?logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![CI](https://github.com/philyuchkoff/health-calc/actions/workflows/ci.yml/badge.svg)](https://github.com/philyuchkoff/health-calc/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-ready-blue?logo=docker)](Dockerfile)

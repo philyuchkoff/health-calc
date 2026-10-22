@@ -53,7 +53,7 @@
 
 ## Requirements
 
-- Go 1.23+ (for building from source)
+- Go 1.27.3+ (for building from source)
 - Docker (optional, for containerization)
 - Prometheus (metric source)
 - Telegram bot token (optional, for alerts)

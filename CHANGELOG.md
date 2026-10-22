@@ -331,3 +331,21 @@ Lock window сократился с минут до <1ms на фазу. Стар
 - `FIXES.md` переименован в `docs/CHANGELOG.md` (git mv), добавлены ссылки на README и GitHub Pages; позже перенесён в корень репозитория (`CHANGELOG.md`)
 - `README-RU.md` → `README-ru.md`, синхронизированы бейджи (Docker, Go Report Card), убран `/metrics` из примеров rate_limit (теперь он явно исключён в коде)
 - Все документы (кроме README и LICENSE) перенесены в `docs/`
+
+## Security
+
+### 45. CVE-2026-111943 (GO-2026-6809) — уязвимость в `crypto/x509`
+
+**Проблема:** Уязвимость в стандартной библиотеке Go (`crypto/x509.Certificate.Verify`): при рассинхронизации системных trust store приложение могло доверять скомпрометированным промежуточным CA eMudhra и принимать поддельные TLS-сертификаты (риск MitM). Затронуты Go `< 1.26.10` и `1.27.0–1.27.2`. Приложение выполняет исходящие HTTPS-запросы к `api.telegram.org` (`prometheus.go`), поэтому уязвимый путь проверки цепочки задействован.
+
+**Фикс:**
+- Builder-образ `Dockerfile`: `golang:1.23-alpine3.21` → `golang:1.27.3-alpine3.21`
+- CI (`.github/workflows/ci.yml`): `go-version: '1.27.3'`, добавлен шаг `govulncheck`
+- `go.mod`: добавлена директива `toolchain go1.27.3` (форсирует пропатченный toolchain)
+- Документация (README, README-ru, `docs/`, `SRE.md`) — требование Go обновлено до 1.27.3+
+
+### 46. Dependabot #1 — CVE-2024-24786 (`google.golang.org/protobuf`)
+
+**Проблема:** `google.golang.org/protobuf@v1.30.0` уязвим к бесконечному циклу в `protojson.Unmarshal` при невалидном JSON (Dependabot #1, medium). Пакет приходит транзитивно через `prometheus/client_golang`; `protojson.Unmarshal` в коде не используется, поэтому `govulncheck` не находил вызываемой уязвимости.
+
+**Фикс:** `google.golang.org/protobuf` → `v1.33.0`, попутно `golang.org/x/sys` → `v0.44.0` (закрыт GO-2026-5024, Windows-only). Директива `go` поднята до `1.25.0` (требование x/sys). `govulncheck` — уязвимостей нет.

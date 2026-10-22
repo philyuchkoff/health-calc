@@ -13,7 +13,7 @@ git clone https://github.com/philyuchkoff/health-calc
 cd health-calc
 ```
 
-Или установить через `go install` (если есть Go 1.23+):
+Или установить через `go install` (если есть Go 1.27.3+):
 
 ```bash
 go install github.com/philyuchkoff/health-calc@latest
