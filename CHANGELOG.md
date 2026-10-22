@@ -349,3 +349,16 @@ Lock window сократился с минут до <1ms на фазу. Стар
 **Проблема:** `google.golang.org/protobuf@v1.30.0` уязвим к бесконечному циклу в `protojson.Unmarshal` при невалидном JSON (Dependabot #1, medium). Пакет приходит транзитивно через `prometheus/client_golang`; `protojson.Unmarshal` в коде не используется, поэтому `govulncheck` не находил вызываемой уязвимости.
 
 **Фикс:** `google.golang.org/protobuf` → `v1.33.0`, попутно `golang.org/x/sys` → `v0.44.0` (закрыт GO-2026-5024, Windows-only). Директива `go` поднята до `1.25.0` (требование x/sys). `govulncheck` — уязвимостей нет.
+
+## CI
+
+### 47. CI на `main` падал на шаге Lint после перехода на Go 1.27.3
+
+**Проблема:** `golangci-lint-action@v6` со `version: latest` ставил `golangci-lint v1.64.8`, собранный на Go 1.24. Линтер отказывался работать с модулем, таргетящим Go 1.27.3: `the Go language version (go1.24) used to build golangci-lint is lower than the targeted Go version (1.27.3)` (exit code 3). Из-за этого шаги `govulncheck`, тесты и `docker build` в CI не запускались.
+
+**Фикс:**
+- `golangci-lint-action` `@v6` → `@v9`, версия линтера закреплена `v2.15.0`
+- `.golangci.yml` мигрирован на формат v2: `version: "2"`, `gofmt` перенесён в `formatters`, `gosimple`/`staticcheck` объединены (v2 включает базовые линтеры по умолчанию)
+- `prometheus.go`: `defer resp.Body.Close()` → `defer func() { _ = resp.Body.Close() }()` (errcheck)
+
+**Проверка:** `golangci-lint run` — 0 issues, build/vet/test — OK.
