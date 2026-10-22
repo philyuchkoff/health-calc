@@ -343,3 +343,9 @@ Lock window сократился с минут до <1ms на фазу. Стар
 - CI (`.github/workflows/ci.yml`): `go-version: '1.27.3'`, добавлен шаг `govulncheck`
 - `go.mod`: добавлена директива `toolchain go1.27.3` (форсирует пропатченный toolchain)
 - Документация (README, README-ru, `docs/`, `SRE.md`) — требование Go обновлено до 1.27.3+
+
+### 46. Dependabot #1 — CVE-2024-24786 (`google.golang.org/protobuf`)
+
+**Проблема:** `google.golang.org/protobuf@v1.30.0` уязвим к бесконечному циклу в `protojson.Unmarshal` при невалидном JSON (Dependabot #1, medium). Пакет приходит транзитивно через `prometheus/client_golang`; `protojson.Unmarshal` в коде не используется, поэтому `govulncheck` не находил вызываемой уязвимости.
+
+**Фикс:** `google.golang.org/protobuf` → `v1.33.0`, попутно `golang.org/x/sys` → `v0.44.0` (закрыт GO-2026-5024, Windows-only). Директива `go` поднята до `1.25.0` (требование x/sys). `govulncheck` — уязвимостей нет.

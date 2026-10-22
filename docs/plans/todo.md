@@ -9,6 +9,7 @@
 - [x] Добавить проверку уязвимостей `govulncheck` в CI
 - [x] Актуализировать версию Go в документации (README, README-ru, docs, SRE.md)
 - [x] Обновить CHANGELOG.md
+- [x] Закрыть Dependabot #1 (CVE-2024-24786): `google.golang.org/protobuf` → v1.33.0, `golang.org/x/sys` → v0.44.0
 
 ## Низкий приоритет
 
