@@ -18,7 +18,7 @@
 
 | Компонент | Версия | Зачем |
 |-----------|--------|-------|
-| Go | 1.23+ | Сборка из исходников |
+| Go | 1.27.3+ | Сборка из исходников |
 | Docker | 20.x+ | Контейнеризация (опционально) |
 | Prometheus | любая | Источник данных |
 | Telegram Bot | — | Алерты (опционально) |
@@ -93,7 +93,7 @@ docker build -t health-calculator .
 Используется multi-stage сборка:
 
 ```
-Stage 1 (builder):        golang:1.23-alpine → компиляция
+Stage 1 (builder):        golang:1.27.3-alpine → компиляция
 Stage 2 (runtime):        alpine:latest → только бинарник + config
 ```
 

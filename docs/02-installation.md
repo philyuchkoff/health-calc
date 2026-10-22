@@ -18,7 +18,7 @@
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| Go | 1.23+ | Building from source |
+| Go | 1.27.3+ | Building from source |
 | Docker | 20.x+ | Containerization (optional) |
 | Prometheus | any | Data source |
 | Telegram Bot | — | Alerts (optional) |
@@ -93,7 +93,7 @@ docker build -t health-calculator .
 Uses multi-stage build:
 
 ```
-Stage 1 (builder):        golang:1.23-alpine → compilation
+Stage 1 (builder):        golang:1.27.3-alpine → compilation
 Stage 2 (runtime):        alpine:latest → binary + config only
 ```
 
