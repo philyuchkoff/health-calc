@@ -364,3 +364,23 @@ Lock window сократился с минут до <1ms на фазу. Стар
 **Дополнительно:** тег `golang:1.27.3-alpine3.21` не существует (Go 1.27.3 публикуется только на alpine 3.23/3.24), из-за чего падал шаг `docker build`. Builder и runtime переведены на `alpine:3.23`.
 
 **Проверка:** `golangci-lint run` — 0 issues, build/vet/test — OK.
+
+## Dependencies
+
+### 48. Обновлены зависимости до актуальных версий
+
+**Проблема:** Прямые зависимости заметно отставали от актуальных релизов (не уязвимости, но пропущенные багфиксы и оптимизации).
+
+**Фикс (`go get -u ./...` + `go mod tidy`):**
+- `github.com/prometheus/client_golang` `v1.16.0` → `v1.25.0`
+- `github.com/prometheus/common` `v0.42.0` → `v0.72.1`
+- `github.com/prometheus/client_model` `v0.3.0` → `v0.6.3`
+- `github.com/prometheus/procfs` `v0.10.1` → `v0.22.0`
+- `github.com/sirupsen/logrus` `v1.9.3` → `v1.10.2`
+- `google.golang.org/protobuf` `v1.33.0` → `v1.36.12`
+- `golang.org/x/sys` `v0.44.0` → `v0.49.0`
+- `github.com/cespare/xxhash/v2` → `v2.3.0`, `github.com/klauspost/compress` → `v1.20.3`
+- удалены более не нужные `golang/protobuf`, `matttproud/golang_protobuf_extensions`, `kr/text`, `rogpeppe/go-internal`
+- директива `go` `1.25.0` → `1.26.0` (требование обновлённых модулей)
+
+**Проверка:** build/vet/test (-race)/lint — OK, `govulncheck` — уязвимостей нет.
