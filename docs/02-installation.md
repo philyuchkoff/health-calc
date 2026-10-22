@@ -93,8 +93,8 @@ docker build -t health-calculator .
 Uses multi-stage build:
 
 ```
-Stage 1 (builder):        golang:1.27.3-alpine → compilation
-Stage 2 (runtime):        alpine:latest → binary + config only
+Stage 1 (builder):        golang:1.27.3-alpine3.23 → compilation
+Stage 2 (runtime):        alpine:3.23 → binary + config only
 ```
 
 Final image size — ~16 MB.

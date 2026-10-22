@@ -361,4 +361,6 @@ Lock window сократился с минут до <1ms на фазу. Стар
 - `.golangci.yml` мигрирован на формат v2: `version: "2"`, `gofmt` перенесён в `formatters`, `gosimple`/`staticcheck` объединены (v2 включает базовые линтеры по умолчанию)
 - `prometheus.go`: `defer resp.Body.Close()` → `defer func() { _ = resp.Body.Close() }()` (errcheck)
 
+**Дополнительно:** тег `golang:1.27.3-alpine3.21` не существует (Go 1.27.3 публикуется только на alpine 3.23/3.24), из-за чего падал шаг `docker build`. Builder и runtime переведены на `alpine:3.23`.
+
 **Проверка:** `golangci-lint run` — 0 issues, build/vet/test — OK.

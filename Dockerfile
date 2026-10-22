@@ -1,4 +1,4 @@
-FROM golang:1.27.3-alpine3.21 AS builder
+FROM golang:1.27.3-alpine3.23 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o health-calculator
 
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk --no-cache add ca-certificates tzdata wget && \
     addgroup -S app && adduser -S app -G app
 WORKDIR /root/
