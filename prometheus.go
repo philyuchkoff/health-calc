@@ -49,7 +49,7 @@ func (hc *HealthCalculator) queryPrometheus(query string, promURL string, timeou
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("prometheus returned status: %d", resp.StatusCode)
@@ -164,7 +164,7 @@ func (hc *HealthCalculator) sendAlert(ctx context.Context, message string, botTo
 		hc.logger.WithError(err, logging.SourceAlerting).Error("Failed to send Telegram alert")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		logger.WithField("status_code", resp.StatusCode).Error("Telegram API returned non-200 status")
